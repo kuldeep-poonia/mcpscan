@@ -15,7 +15,7 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a 
 - **CIDR & IP Target Resolution:** Scans CIDR ranges (e.g. `192.168.1.0/24`) or explicit IP lists.
 - **Safety Host Capping:** Enforces a default cap of 1024 hosts to prevent accidental wide-area scans.
 - **RFC1918 Private Range Protection:** Restricts scanning to loopback (`127.0.0.0/8`) and private RFC1918 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) by default. Public IP scanning requires the `--i-understand-the-risk` override flag.
-- **Port Range Specification:** Flexible port range and list parsing (e.g. `--ports 8000-8005,3000,5000,8080`).
+- **Flexible Port Specification:** Supports default port lists, custom ranges, discrete port lists, or exhaustive full-range port scans (`1-65535`).
 - **Worker-Pool Concurrency & Global Rate Limiting:** Bounded concurrency pool (`--concurrency`, default 100) and global request rate limiting (`--rate-limit`, default 500 req/sec) to protect target networks from flooding.
 - **TCP Connect Scanner:** Standard TCP socket scanner requiring no root or administrator privileges.
 
@@ -69,28 +69,78 @@ go build -o mcpscan main.go
 
 ---
 
-## Usage
+## Step-by-Step Usage Guide
 
-### Scenario 1: Quick Scan of Localhost
+### 1. Default Quick Scan (Common Ports)
+If you omit the `--ports` flag, MCPScan automatically scans popular MCP development ports (`8000`, `8080`, `3000`, `5000`, `8081`, `8001`, `8002`, `8888`, `9000`, `9090`, `5001`, `8443`):
+
 ```bash
-mcpscan scan --local --ports 8000-8500
+mcpscan scan --local
 ```
 
-### Scenario 2: Scanning a Corporate Private Network Range
+### 2. Scanning Specific Ports or Ranges
+To scan specific ports or custom port ranges, use the `--ports` flag:
+
 ```bash
+# Scan specific discrete ports
+mcpscan scan --local --ports 8001,8002,9000
+
+# Scan a range of ports
+mcpscan scan --local --ports 8000-8500
+
+# Combine discrete ports and ranges
+mcpscan scan --local --ports 3000,5000,8000-8050
+```
+
+### 3. Exhaustive Full Machine Scan (All 65,535 Ports)
+To perform a complete scan across **all 65,535 TCP ports** on your machine:
+
+```bash
+mcpscan scan --local --ports 1-65535
+```
+
+### 4. Scanning a Network Subnet (Private Range / CIDR)
+To scan an entire local network subnet or range of hosts:
+
+```bash
+# Scan a /24 subnet (up to 256 hosts) with custom rate limit
 mcpscan scan --target 192.168.1.0/24 --concurrency 50 --rate-limit 200 --output corp_scan.db
 ```
 
-### Scenario 3: Exporting JSON Output for SIEM / Security Tool Integration
+### 5. Exporting Structured JSON Output
+To export results directly in JSON format for SIEM or automated security tool integration:
+
 ```bash
 mcpscan scan --target 10.0.0.0/28 --format json --output audit.db
 ```
 
-### Scenario 4: Re-rendering Stored Scan Results Offline
+### 6. Offline Report Inspection Subcommand
+Re-render previously saved SQLite database scan records anytime without re-scanning the network:
+
 ```bash
+# Display formatted summary table from database
 mcpscan report --db corp_scan.db --format table
+
+# Display raw JSON report from database
 mcpscan report --db audit.db --format json
 ```
+
+---
+
+## CLI Flag Reference
+
+| Flag | Default | Description |
+|---|---|---|
+| `--target` | `127.0.0.1` | Target IP address or CIDR subnet (e.g. `192.168.1.0/24`). |
+| `--local` | `false` | Quick flag alias to target `127.0.0.1`. |
+| `--ports` | *Common MCP ports* | Port specification: list (`8000,8080`), range (`8000-8500`), or full (`1-65535`). |
+| `--concurrency` | `100` | Worker pool concurrency count (max `500`). |
+| `--rate-limit` | `500` | Global request rate limit in req/sec (max `2000`). |
+| `--timeout` | `2s` | Network socket dial and HTTP context timeout duration. |
+| `--output` | `mcpscan.db` | Path to local SQLite database file for persisting scan results. |
+| `--format` | `table` | Output display format (`table` or `json`). |
+| `--i-understand-the-risk` | `false` | Override flag required to enable scanning public IP addresses. |
+| `--db` | `mcpscan.db` | Database file path for `mcpscan report` subcommand. |
 
 ---
 
