@@ -35,33 +35,42 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a 
   - **`unknown` (Low Confidence):** Network error, HTTP 500, or ambiguous payload $\rightarrow$ Derived Risk Level: **`MEDIUM`**.
 - **Non-Destructive Audit:** Read-only informational probing adhering strictly to security detection rules.
 
+### Phase 4 — SQLite Storage & Multi-Format Reporter
+- **Embedded SQLite Persistence:** Zero-server, single-file SQLite storage (`scans` and `discovered_servers` tables).
+- **Foreign Key Enforcement:** Explicitly enables `PRAGMA foreign_keys = ON;` per-connection to guarantee referential integrity.
+- **Cross-Platform Permission Hardening:** Restricts database file permissions (`0600` on Unix; Windows ACL inheritance stripping via `icacls`) with graceful error handling.
+- **Multi-Format Reporter:** Renders reports in clean ASCII table format (`--format table`) or structured JSON (`--format json`).
+- **Mandatory Limitation Disclosure:** 100% of reports include the known limitations block (stdio transport blind spot disclosure + confidence model context).
+- **Report Subcommand:** Offline reading and re-rendering of stored scans (`mcpscan report --db <path.db> [--format table|json]`).
+
 ---
 
 ## Terminology & Pipeline Stages
 
-To avoid conflating network state with protocol and auth classification:
 1. **Target Resolver:** Resolves IP ranges (capped at 1024 hosts max).
 2. **Discovered Open TCP Ports:** Ports identified by the TCP connect scanner.
 3. **Confirmed / Likely MCP Servers:** Services verified by the multi-layer HTTP JSON-RPC handshake.
 4. **Auth Audit Status:** `unprotected` (HIGH risk), `protected` (LOW risk), or `unknown` (MEDIUM risk).
+5. **Storage & Reporter:** Persisted SQLite database records and rendered CLI/JSON reports.
 
 ---
 
 ## Usage Examples
 
-### Scanning Localhost
+### Executing a Scan & Saving to Database
 ```bash
-mcpscan scan --local --ports 8000-8500
+mcpscan scan --local --ports 8000-8500 --output my_scan.db
 ```
 
-### Scanning a Private Network CIDR
+### Exporting Scan Results to JSON
 ```bash
-mcpscan scan --target 192.168.1.0/24 --concurrency 50 --rate-limit 200
+mcpscan scan --target 192.168.1.0/24 --format json --output net_scan.db
 ```
 
-### Advanced Port Ranges & Custom Timeout
+### Re-rendering a Stored Scan Offline
 ```bash
-mcpscan scan --target 10.0.0.15 --ports 3000,5000,8000-8080 --timeout 1s
+mcpscan report --db my_scan.db --format table
+mcpscan report --db net_scan.db --format json
 ```
 
 ---

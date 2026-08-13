@@ -18,32 +18,49 @@ import (
 const Version = "v1.0.0-dev"
 
 func main() {
-	var (
-		target      = flag.String("target", "", "Target CIDR network range (e.g. 192.168.1.0/24)")
-		local       = flag.Bool("local", false, "Scan local machine loopback only (127.0.0.1)")
-		ports       = flag.String("ports", "8000-9000,3000,5000,8080", "Port range or comma-separated list to scan")
-		timeout     = flag.Duration("timeout", 2*time.Second, "Per-connection timeout")
-		concurrency = flag.Int("concurrency", 100, "Maximum worker pool concurrency")
-		rateLimit   = flag.Int("rate-limit", 500, "Maximum requests per second limit")
-		output      = flag.String("output", "mcpscan.db", "SQLite database output path")
-		format      = flag.String("format", "table", "Output report format (table|json)")
-		allowPublic = flag.Bool("i-understand-the-risk", false, "Allow scanning public non-RFC1918 ranges")
-		versionFlag = flag.Bool("version", false, "Print MCPScan version and exit")
-	)
+	if len(os.Args) > 1 && os.Args[1] == "report" {
+		runReportSubcommand(os.Args[2:])
+		return
+	}
 
-	flag.Usage = func() {
+	// Default / scan subcommand flags
+	scanCmd := flag.NewFlagSet("scan", flag.ExitOnError)
+	target := scanCmd.String("target", "", "Target CIDR network range (e.g. 192.168.1.0/24)")
+	local := scanCmd.Bool("local", false, "Scan local machine loopback only (127.0.0.1)")
+	ports := scanCmd.String("ports", "8000-9000,3000,5000,8080", "Port range or comma-separated list to scan")
+	timeout := scanCmd.Duration("timeout", 2*time.Second, "Per-connection timeout")
+	concurrency := scanCmd.Int("concurrency", 100, "Maximum worker pool concurrency")
+	rateLimit := scanCmd.Int("rate-limit", 500, "Maximum requests per second limit")
+	output := scanCmd.String("output", "mcpscan.db", "SQLite database output path")
+	format := scanCmd.String("format", "table", "Output report format (table|json)")
+	allowPublic := scanCmd.Bool("i-understand-the-risk", false, "Allow scanning public non-RFC1918 ranges")
+	versionFlag := scanCmd.Bool("version", false, "Print MCPScan version and exit")
+
+	scanCmd.Usage = func() {
 		fmt.Fprintf(os.Stderr, "MCPScan %s — Local-only Shadow MCP Server Discovery & Auth Audit Tool\n\n", Version)
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  mcpscan scan [flags]\n")
 		fmt.Fprintf(os.Stderr, "  mcpscan report --db <path.db> [--format table|json]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
-		flag.PrintDefaults()
+		scanCmd.PrintDefaults()
 	}
 
-	flag.Parse()
+	argsToParse := os.Args[1:]
+	if len(os.Args) > 1 && os.Args[1] == "scan" {
+		argsToParse = os.Args[2:]
+	}
+
+	if err := scanCmd.Parse(argsToParse); err != nil {
+		os.Exit(1)
+	}
 
 	if *versionFlag {
 		fmt.Printf("MCPScan %s\n", Version)
+		os.Exit(0)
+	}
+
+	if len(os.Args) == 1 {
+		scanCmd.Usage()
 		os.Exit(0)
 	}
 
@@ -57,11 +74,6 @@ func main() {
 		OutputPath:  *output,
 		AllowPublic: *allowPublic,
 		Format:      *format,
-	}
-
-	if len(os.Args) == 1 {
-		flag.Usage()
-		os.Exit(0)
 	}
 
 	ctx := context.Background()
@@ -136,9 +148,12 @@ func main() {
 			activeServers, unprotectedCount, protectedCount, unknownCount)
 	}
 
-	// Downstream storage
+	// 5. Storage (Phase 4 - SQLite Persistence)
 	store := storage.NewStorage(cfg.OutputPath)
-	_ = store.InitSchema(ctx)
+	if err := store.InitSchema(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Storage schema initialization error: %v\n", err)
+		os.Exit(1)
+	}
 
 	record := &types.ScanRecord{
 		StartedAt:         startScan,
@@ -147,8 +162,41 @@ func main() {
 		TotalHostsScanned: len(targets),
 		ToolVersion:       Version,
 	}
-	_ = store.SaveScan(ctx, record, auditedServers)
 
+	if err := store.SaveScan(ctx, record, auditedServers); err != nil {
+		fmt.Fprintf(os.Stderr, "Storage write error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[+] Storage: Persisted scan #%d results to %s\n\n", record.ID, cfg.OutputPath)
+
+	// 6. Reporter (Phase 4 - Table / JSON Rendering)
 	rep := report.NewReporter(cfg.Format)
 	_ = rep.Render(os.Stdout, record, auditedServers)
+}
+
+func runReportSubcommand(args []string) {
+	reportCmd := flag.NewFlagSet("report", flag.ExitOnError)
+	dbPath := reportCmd.String("db", "mcpscan.db", "SQLite database file path")
+	format := reportCmd.String("format", "table", "Output format (table|json)")
+
+	if err := reportCmd.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	store := storage.NewStorage(*dbPath)
+	record, servers, err := store.GetLastScan(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading database report from %s: %v\n", *dbPath, err)
+		os.Exit(1)
+	}
+
+	if record == nil || record.ID == 0 {
+		fmt.Fprintf(os.Stderr, "No scan records found in database file %s\n", *dbPath)
+		os.Exit(1)
+	}
+
+	rep := report.NewReporter(*format)
+	_ = rep.Render(os.Stdout, record, servers)
 }

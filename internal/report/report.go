@@ -2,8 +2,11 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
+	"text/tabwriter"
 
 	"mcpscan/pkg/types"
 )
@@ -17,6 +20,13 @@ const LimitationNotice = `
   levels (confirmed | likely | none).
 `
 
+// JSONReportPayload represents the structured output for `--format json`.
+type JSONReportPayload struct {
+	Limitations       []string                 `json:"known_limitations"`
+	ScanMetadata      *types.ScanRecord        `json:"scan_metadata"`
+	DiscoveredServers []types.DiscoveredServer `json:"discovered_servers"`
+}
+
 // Reporter manages output formatting for scan results.
 type Reporter struct {
 	format string
@@ -24,27 +34,92 @@ type Reporter struct {
 
 // NewReporter constructs a Reporter with specified format ("table" or "json").
 func NewReporter(format string) *Reporter {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format != "json" {
+		format = "table"
+	}
 	return &Reporter{format: format}
 }
 
 // Render writes formatted scan results and mandatory limitation disclosure to w.
 func (r *Reporter) Render(w io.Writer, record *types.ScanRecord, servers []types.DiscoveredServer) error {
-	var confirmed, likely, unprotected, protected int
+	if r.format == "json" {
+		return r.renderJSON(w, record, servers)
+	}
+	return r.renderTable(w, record, servers)
+}
+
+// renderTable renders ASCII tabular output with mandatory limitation disclosure.
+func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, servers []types.DiscoveredServer) error {
+	// Print mandatory limitation disclosure
+	if _, err := io.WriteString(w, LimitationNotice+"\n"); err != nil {
+		return err
+	}
+
+	var confirmed, likely, unprotected, protected, highRisk int
 	for _, s := range servers {
-		if s.MCPConfidence == types.ConfidenceConfirmed {
+		switch s.MCPConfidence {
+		case types.ConfidenceConfirmed:
 			confirmed++
-		} else if s.MCPConfidence == types.ConfidenceLikely {
+		case types.ConfidenceLikely:
 			likely++
 		}
 
-		if s.AuthStatus == types.AuthUnprotected {
+		switch s.AuthStatus {
+		case types.AuthUnprotected:
 			unprotected++
-		} else if s.AuthStatus == types.AuthProtected {
+		case types.AuthProtected:
 			protected++
+		}
+
+		if s.RiskLevel == types.RiskHigh {
+			highRisk++
 		}
 	}
 
-	summary := fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely.\n", confirmed, likely)
-	_, err := io.WriteString(w, LimitationNotice+"\n"+summary)
+	totalDiscovered := len(servers)
+	if totalDiscovered > 0 {
+		fmt.Fprintln(w, "DISCOVERED MCP SERVERS:")
+		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(tw, "TARGET IP:PORT\tMCP CONFIDENCE\tPROTOCOL VERSION\tAUTH STATUS\tRISK LEVEL")
+		fmt.Fprintln(tw, "--------------\t--------------\t----------------\t-----------\t----------")
+
+		for _, srv := range servers {
+			targetAddr := fmt.Sprintf("%s:%d", srv.IP, srv.Port)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+				targetAddr,
+				srv.MCPConfidence,
+				srv.ProtocolVersion,
+				srv.AuthStatus,
+				srv.RiskLevel,
+			)
+		}
+		_ = tw.Flush()
+		fmt.Fprintln(w, "")
+	}
+
+	summary := fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely (%d unprotected, %d HIGH risk).\n",
+		confirmed, likely, unprotected, highRisk)
+	_, err := io.WriteString(w, summary)
 	return err
+}
+
+// renderJSON renders structured JSON payload containing scan metadata and mandatory limitations.
+func (r *Reporter) renderJSON(w io.Writer, record *types.ScanRecord, servers []types.DiscoveredServer) error {
+	if servers == nil {
+		servers = []types.DiscoveredServer{}
+	}
+
+	payload := JSONReportPayload{
+		Limitations: []string{
+			"Stdio Transport Blind Spot: MCPScan detects HTTP-transport MCP servers only. Stdio-transport servers are undetectable via network scanning.",
+			"Confidence Model: Discovered servers are labeled with explicit confidence levels (confirmed | likely | none).",
+		},
+		ScanMetadata:      record,
+		DiscoveredServers: servers,
+	}
+
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
 }
