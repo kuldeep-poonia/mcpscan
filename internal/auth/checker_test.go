@@ -160,6 +160,42 @@ func TestAuthClassificationAccuracy(t *testing.T) {
 	}
 }
 
+// TestSkipAuthForNonMCP asserts that servers with ConfidenceNone receive ZERO HTTP requests during auth checking.
+func TestSkipAuthForNonMCP(t *testing.T) {
+	var requestCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	nonMCPServer := types.DiscoveredServer{
+		IP:            host,
+		Port:          port,
+		MCPConfidence: types.ConfidenceNone,
+	}
+
+	c := NewChecker(1 * time.Second)
+	res, err := c.CheckAuth(context.Background(), nonMCPServer)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	actualRequests := atomic.LoadInt32(&requestCount)
+	t.Logf("Requests received for ConfidenceNone server: %d", actualRequests)
+
+	if actualRequests != 0 {
+		t.Errorf("VIOLATION: Expected 0 HTTP requests sent to ConfidenceNone server, got %d", actualRequests)
+	}
+
+	if res.AuthStatus != types.AuthUnknown {
+		t.Errorf("expected AuthUnknown for ConfidenceNone server, got %v", res.AuthStatus)
+	}
+}
+
 // TestRequestCountDiscipline runs CheckAuthBatch against a multi-server batch and asserts EVERY server received EXACTLY 1 request.
 func TestRequestCountDiscipline(t *testing.T) {
 	numServers := 5
