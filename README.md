@@ -5,89 +5,130 @@
 MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a local machine or private network range (CIDR) to discover running Model Context Protocol (MCP) servers, verify them, and audit whether authentication is enforced.
 
 > [!IMPORTANT]
-> **Privacy Guarantee:** MCPScan makes zero outbound network calls except to user-specified scan targets. No analytics, no phone-home, no telemetry.
+> **Privacy Guarantee:** MCPScan makes zero outbound network calls except to user-specified scan targets. No analytics, no telemetry, no phone-home of any kind.
 
 ---
 
-## Features Implemented
+## Features
 
-### Phase 1 — Target Resolver & Worker-Pool Port Scanner
-- **CIDR & Single IP Expansion:** Converts CIDRs (e.g. `192.168.1.0/24`) or IP lists into bounded target host lists.
-- **Safety Host Capping:** Enforces a default limit of 1024 hosts to prevent accidental wide-area scans.
-- **RFC1918 Private Range Protection:** Restricts scanning to loopback (`127.0.0.0/8`) and private RFC1918 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) by default. Public IP scanning requires explicit `--i-understand-the-risk` override flag.
-- **Port Specification Parsing:** Flexible port lists and range parsing (e.g. `--ports 8000-8005,3000,5000,8080`).
-- **Worker-Pool Concurrency:** Configurable worker pool (`--concurrency`, default 100).
-- **Single Shared Rate Limiting:** Global rate limit ticker (`--rate-limit`, default 500 req/sec) shared across all worker goroutines to protect target networks from flooding.
-- **TCP Connect Scanner:** Non-elevated, standard TCP `net.DialTimeout` scanner.
+### Network Discovery
+- **CIDR & IP Target Resolution:** Scans CIDR ranges (e.g. `192.168.1.0/24`) or explicit IP lists.
+- **Safety Host Capping:** Enforces a default cap of 1024 hosts to prevent accidental wide-area scans.
+- **RFC1918 Private Range Protection:** Restricts scanning to loopback (`127.0.0.0/8`) and private RFC1918 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) by default. Public IP scanning requires the `--i-understand-the-risk` override flag.
+- **Port Range Specification:** Flexible port range and list parsing (e.g. `--ports 8000-8005,3000,5000,8080`).
+- **Worker-Pool Concurrency & Global Rate Limiting:** Bounded concurrency pool (`--concurrency`, default 100) and global request rate limiting (`--rate-limit`, default 500 req/sec) to protect target networks from flooding.
+- **TCP Connect Scanner:** Standard TCP socket scanner requiring no root or administrator privileges.
 
-### Phase 2 — 3-Layer HTTP MCP Server Detector
-- **Layer 1 Verification:** Sends JSON-RPC 2.0 `initialize` request and validates `jsonrpc: "2.0"` compliance.
-- **Layer 2 Verification:** Inspects response result for MCP-specific required fields (`protocolVersion`, `capabilities`). Services passing Layer 1+2 are classified as `likely`.
-- **Layer 3 Verification:** Issues secondary probe (`tools/list`) to cross-confirm protocol consistency. Services passing Layer 1+2+3 upgrade to `confirmed`.
-- **Explicit `ConfidenceNone` Classification:** Services failing Layer 1/2 checks (such as Ethereum JSON-RPC nodes or plain HTTP servers) are explicitly classified as `none` rather than silently dropped.
-- **Resilience & Timeout Enforcement:** Handles malformed HTTP responses, memory bomb defenses (1MB response limit), and hanging/slow connection timeouts cleanly.
+### MCP Server Detection
+- **Multi-Layer HTTP Verification:** Evaluates services through a 3-layer handshake (Layer 1 JSON-RPC 2.0 structure, Layer 2 MCP `protocolVersion`/`capabilities` validation, Layer 3 secondary method cross-confirmation).
+- **Explicit Non-MCP Classification:** Services failing protocol checks (such as Ethereum nodes or plain web servers) are explicitly classified as `none` rather than silently dropped.
+- **Resilience Controls:** Defends against memory bombs (1MB response size cap) and hanging connection timeouts.
 
-### Phase 3 — Single-Probe Authentication Audit Checker
-- **Single-Request Discipline:** Performs **exactly 1 unauthenticated request** per detected MCP server. Zero retries, zero password lists, zero credential brute-forcing, zero auth bypass attempts.
-- **Classification Engine:**
-  - **`unprotected` (High Confidence):** HTTP 200 OK with valid tool/result payload $\rightarrow$ Derived Risk Level: **`HIGH`**.
-  - **`protected` (High Confidence):** HTTP 401 Unauthorized or 403 Forbidden $\rightarrow$ Derived Risk Level: **`LOW`**.
-  - **`unknown` (Low Confidence):** Network error, HTTP 500, or ambiguous payload $\rightarrow$ Derived Risk Level: **`MEDIUM`**.
-- **Non-Destructive Audit:** Read-only informational probing adhering strictly to security detection rules.
+### Authentication Auditing
+- **Single-Request Discipline:** Sends **exactly 1 unauthenticated request** per detected server. No retries, no password lists, no brute-forcing, no auth bypass attempts.
+- **Non-Destructive Audit:** Evaluates authentication enforcement without modifying target server state.
 
-### Phase 4 — SQLite Storage & Multi-Format Reporter
-- **Embedded SQLite Persistence:** Zero-server, single-file SQLite storage (`scans` and `discovered_servers` tables).
-- **Foreign Key Enforcement:** Explicitly enables `PRAGMA foreign_keys = ON;` per-connection to guarantee referential integrity.
-- **Cross-Platform Permission Hardening:** Restricts database file permissions (`0600` on Unix; Windows ACL inheritance stripping via `icacls`) with graceful error handling.
-- **Multi-Format Reporter:** Renders reports in clean ASCII table format (`--format table`) or structured JSON (`--format json`).
-- **Mandatory Limitation Disclosure:** 100% of reports include the known limitations block (stdio transport blind spot disclosure + confidence model context).
-- **Report Subcommand:** Offline reading and re-rendering of stored scans (`mcpscan report --db <path.db> [--format table|json]`).
+### Local Storage & Reporting
+- **Embedded SQLite Persistence:** Stores scan records and server details locally in an embedded SQLite database (`scans` and `discovered_servers` schema).
+- **Cross-Platform Permission Hardening:** Restricts database file permissions (`0600` on Unix; Windows ACL inheritance stripping via `icacls`).
+- **Multi-Format Output:** Formats reports as clean ASCII tables (`--format table`) or structured JSON (`--format json`).
+- **Offline Report Inspection:** Re-render stored scan results anytime via `mcpscan report --db <path.db> [--format table|json]`.
 
 ---
 
-## Terminology & Pipeline Stages
+## Installation
 
-1. **Target Resolver:** Resolves IP ranges (capped at 1024 hosts max).
-2. **Discovered Open TCP Ports:** Ports identified by the TCP connect scanner.
-3. **Confirmed / Likely MCP Servers:** Services verified by the multi-layer HTTP JSON-RPC handshake.
-4. **Auth Audit Status:** `unprotected` (HIGH risk), `protected` (LOW risk), or `unknown` (MEDIUM risk).
-5. **Storage & Reporter:** Persisted SQLite database records and rendered CLI/JSON reports.
+### Downloading Pre-Built Binaries
 
----
+Pre-compiled, zero-CGO binaries are available on the [GitHub Releases](https://github.com/kuldeep-poonia/mcpscan/releases/tag/v1.0.0) page:
 
-## Usage Examples
+- **Linux (x86_64):** `mcpscan-linux-amd64`
+- **macOS (Intel):** `mcpscan-darwin-amd64`
+- **macOS (Apple Silicon):** `mcpscan-darwin-arm64`
+- **Windows (x86_64):** `mcpscan-windows-amd64.exe`
 
-### Executing a Scan & Saving to Database
+### Verifying SHA256 Checksums
+
+Download `checksums.txt` along with your binary and verify its integrity:
+
 ```bash
-mcpscan scan --local --ports 8000-8500 --output my_scan.db
+# Linux / macOS
+sha256sum -c checksums.txt --ignore-missing
+
+# Windows (PowerShell)
+Get-FileHash mcpscan-windows-amd64.exe -Algorithm SHA256
 ```
 
-### Exporting Scan Results to JSON
-```bash
-mcpscan scan --target 192.168.1.0/24 --format json --output net_scan.db
-```
+### Building from Source
 
-### Re-rendering a Stored Scan Offline
 ```bash
-mcpscan report --db my_scan.db --format table
-mcpscan report --db net_scan.db --format json
+git clone https://github.com/kuldeep-poonia/mcpscan.git
+cd mcpscan
+go build -o mcpscan main.go
 ```
 
 ---
 
-## Known Blind Spots & Limitations
+## Usage
 
-- **Stdio Transport:** MCPScan currently detects HTTP-transport MCP servers only. Stdio-transport servers (e.g., inside IDE plugins) are undetectable via network scanning.
-- **Detection Confidence:** Discovered services are labeled with explicit confidence levels (`confirmed`, `likely`, `none`) rather than absolute assumptions.
+### Scenario 1: Quick Scan of Localhost
+```bash
+mcpscan scan --local --ports 8000-8500
+```
+
+### Scenario 2: Scanning a Corporate Private Network Range
+```bash
+mcpscan scan --target 192.168.1.0/24 --concurrency 50 --rate-limit 200 --output corp_scan.db
+```
+
+### Scenario 3: Exporting JSON Output for SIEM / Security Tool Integration
+```bash
+mcpscan scan --target 10.0.0.0/28 --format json --output audit.db
+```
+
+### Scenario 4: Re-rendering Stored Scan Results Offline
+```bash
+mcpscan report --db corp_scan.db --format table
+mcpscan report --db audit.db --format json
+```
 
 ---
 
-## Building & Testing
+## Understanding the Output
+
+### MCP Confidence Levels
+- **`confirmed`:** Server passed all 3 verification layers (valid JSON-RPC 2.0, MCP capabilities/protocolVersion, and secondary probe).
+- **`likely`:** Server passed Layer 1 & Layer 2 checks.
+- **`none`:** Service did not respond with valid MCP JSON-RPC protocol fields (e.g. Ethereum RPC nodes, plain web servers).
+
+### Authentication Status & Risk Levels
+- **`unprotected` / `HIGH` Risk:** Server responded with a full tool list to unauthenticated requests. Immediate security attention required.
+- **`protected` / `LOW` Risk:** Server returned HTTP 401 Unauthorized or 403 Forbidden to unauthenticated requests. Authentication is enforced.
+- **`unknown` / `MEDIUM` Risk:** Server returned an ambiguous response or a network timeout occurred during probing.
+
+---
+
+## Known Limitations
+
+- **Stdio Transport Blind Spot:** MCPScan detects HTTP-transport MCP servers only. Stdio-transport servers (e.g., inside IDE plugins) are undetectable via network scanning.
+- **Confidence Model:** Discovered services are labeled with explicit confidence levels (`confirmed`, `likely`, `none`) rather than absolute assumptions.
+
+---
+
+## Contributing & Building from Source
+
+Requirements: Go 1.21 or later.
 
 ```bash
 # Run unit tests
 go test -v ./...
 
-# Build binary
-go build -o mcpscan main.go
+# Cross-compile release binaries
+make cross-build
 ```
+
+---
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
