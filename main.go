@@ -109,43 +109,19 @@ func main() {
 	det := detector.NewDetector(cfg.Timeout)
 	discovered, _ := det.DetectBatch(ctx, openPorts)
 
-	var confirmedCount, likelyCount, noneCount int
-	for _, srv := range discovered {
-		switch srv.MCPConfidence {
-		case types.ConfidenceConfirmed:
-			confirmedCount++
-		case types.ConfidenceLikely:
-			likelyCount++
-		default:
-			noneCount++
-		}
-	}
-
-	fmt.Printf("[+] MCP Detector: Identified %d confirmed, %d likely, and %d non-MCP server(s)\n", confirmedCount, likelyCount, noneCount)
+	detCounts := types.CalculateSummaryCounts(discovered)
+	fmt.Printf("[+] MCP Detector: Identified %d confirmed, %d likely, %d unverifiable (protected), and %d non-MCP server(s)\n",
+		detCounts.Confirmed, detCounts.Likely, detCounts.Unverifiable, detCounts.None)
 
 	// 4. Auth Checking (Phase 3 - Single Probe Audit)
 	chk := auth.NewChecker(cfg.Timeout)
 	auditedServers, _ := chk.CheckAuthBatch(ctx, discovered)
 
-	var unprotectedCount, protectedCount, unknownCount int
-	for _, srv := range auditedServers {
-		if srv.MCPConfidence == types.ConfidenceNone {
-			continue
-		}
-		switch srv.AuthStatus {
-		case types.AuthUnprotected:
-			unprotectedCount++
-		case types.AuthProtected:
-			protectedCount++
-		default:
-			unknownCount++
-		}
-	}
-
-	activeServers := confirmedCount + likelyCount
-	if activeServers > 0 {
-		fmt.Printf("[+] Auth Audit: Evaluated %d MCP server(s): %d unprotected (HIGH risk), %d protected (LOW risk), %d unknown (MEDIUM risk)\n",
-			activeServers, unprotectedCount, protectedCount, unknownCount)
+	authCounts := types.CalculateSummaryCounts(auditedServers)
+	if authCounts.Evaluated > 0 {
+		protectedStr := formatProtectedSummary(authCounts.Protected, authCounts.ProtectedLowRisk, authCounts.ProtectedMediumRisk)
+		fmt.Printf("[+] Auth Audit: Evaluated %d server(s): %d unprotected (HIGH risk), %s, %d unknown (MEDIUM risk)\n",
+			authCounts.Evaluated, authCounts.Unprotected, protectedStr, authCounts.Unknown)
 	}
 
 	// 5. Storage (Phase 4 - SQLite Persistence)
@@ -200,3 +176,14 @@ func runReportSubcommand(args []string) {
 	rep := report.NewReporter(*format)
 	_ = rep.Render(os.Stdout, record, servers)
 }
+
+func formatProtectedSummary(total, lowRisk, mediumRisk int) string {
+	if lowRisk > 0 && mediumRisk > 0 {
+		return fmt.Sprintf("%d protected (%d LOW risk, %d MEDIUM risk)", total, lowRisk, mediumRisk)
+	}
+	if mediumRisk > 0 {
+		return fmt.Sprintf("%d protected (MEDIUM risk)", total)
+	}
+	return fmt.Sprintf("%d protected (LOW risk)", total)
+}
+

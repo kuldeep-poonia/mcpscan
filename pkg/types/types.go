@@ -82,3 +82,69 @@ type OpenPort struct {
 	IP   string `json:"ip"`
 	Port int    `json:"port"`
 }
+
+// SummaryCounts holds calculated counts across all 4 MCP confidence categories and security risk tiers.
+type SummaryCounts struct {
+	Confirmed           int
+	Likely              int
+	Unverifiable        int
+	None                int
+	Evaluated           int
+	Unprotected         int
+	Protected           int
+	ProtectedLowRisk    int
+	ProtectedMediumRisk int
+	Unknown             int
+	HighRisk            int
+	MediumRisk          int
+	LowRisk             int
+}
+
+// CalculateSummaryCounts evaluates a slice of DiscoveredServer records and returns an aggregated SummaryCounts struct.
+func CalculateSummaryCounts(servers []DiscoveredServer) SummaryCounts {
+	var c SummaryCounts
+
+	for _, s := range servers {
+		switch s.MCPConfidence {
+		case ConfidenceConfirmed:
+			c.Confirmed++
+		case ConfidenceLikely:
+			c.Likely++
+		case ConfidenceUnverifiableProtected:
+			c.Unverifiable++
+		default:
+			c.None++
+		}
+
+		if s.MCPConfidence == ConfidenceNone {
+			continue
+		}
+		c.Evaluated++
+
+		switch s.AuthStatus {
+		case AuthUnprotected:
+			c.Unprotected++
+		case AuthProtected:
+			c.Protected++
+			if s.RiskLevel == RiskLow {
+				c.ProtectedLowRisk++
+			} else if s.RiskLevel == RiskMedium {
+				c.ProtectedMediumRisk++
+			}
+		default:
+			c.Unknown++
+		}
+
+		switch s.RiskLevel {
+		case RiskHigh:
+			c.HighRisk++
+		case RiskMedium:
+			c.MediumRisk++
+		case RiskLow:
+			c.LowRisk++
+		}
+	}
+
+	return c
+}
+
