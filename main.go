@@ -111,12 +111,32 @@ func main() {
 
 	fmt.Printf("[+] MCP Detector: Identified %d confirmed, %d likely, and %d non-MCP server(s)\n", confirmedCount, likelyCount, noneCount)
 
-	// Downstream module stubs
+	// 4. Auth Checking (Phase 3 - Single Probe Audit)
 	chk := auth.NewChecker(cfg.Timeout)
-	for i, srv := range discovered {
-		discovered[i], _ = chk.CheckAuth(ctx, srv)
+	auditedServers, _ := chk.CheckAuthBatch(ctx, discovered)
+
+	var unprotectedCount, protectedCount, unknownCount int
+	for _, srv := range auditedServers {
+		if srv.MCPConfidence == types.ConfidenceNone {
+			continue
+		}
+		switch srv.AuthStatus {
+		case types.AuthUnprotected:
+			unprotectedCount++
+		case types.AuthProtected:
+			protectedCount++
+		default:
+			unknownCount++
+		}
 	}
 
+	activeServers := confirmedCount + likelyCount
+	if activeServers > 0 {
+		fmt.Printf("[+] Auth Audit: Evaluated %d MCP server(s): %d unprotected (HIGH risk), %d protected (LOW risk), %d unknown (MEDIUM risk)\n",
+			activeServers, unprotectedCount, protectedCount, unknownCount)
+	}
+
+	// Downstream storage
 	store := storage.NewStorage(cfg.OutputPath)
 	_ = store.InitSchema(ctx)
 
@@ -127,8 +147,8 @@ func main() {
 		TotalHostsScanned: len(targets),
 		ToolVersion:       Version,
 	}
-	_ = store.SaveScan(ctx, record, discovered)
+	_ = store.SaveScan(ctx, record, auditedServers)
 
 	rep := report.NewReporter(cfg.Format)
-	_ = rep.Render(os.Stdout, record, discovered)
+	_ = rep.Render(os.Stdout, record, auditedServers)
 }

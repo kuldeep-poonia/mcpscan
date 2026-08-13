@@ -27,13 +27,23 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a 
 - **Explicit `ConfidenceNone` Classification:** Services failing Layer 1/2 checks (such as Ethereum JSON-RPC nodes or plain HTTP servers) are explicitly classified as `none` rather than silently dropped.
 - **Resilience & Timeout Enforcement:** Handles malformed HTTP responses, memory bomb defenses (1MB response limit), and hanging/slow connection timeouts cleanly.
 
+### Phase 3 — Single-Probe Authentication Audit Checker
+- **Single-Request Discipline:** Performs **exactly 1 unauthenticated request** per detected MCP server. Zero retries, zero password lists, zero credential brute-forcing, zero auth bypass attempts.
+- **Classification Engine:**
+  - **`unprotected` (High Confidence):** HTTP 200 OK with valid tool/result payload $\rightarrow$ Derived Risk Level: **`HIGH`**.
+  - **`protected` (High Confidence):** HTTP 401 Unauthorized or 403 Forbidden $\rightarrow$ Derived Risk Level: **`LOW`**.
+  - **`unknown` (Low Confidence):** Network error, HTTP 500, or ambiguous payload $\rightarrow$ Derived Risk Level: **`MEDIUM`**.
+- **Non-Destructive Audit:** Read-only informational probing adhering strictly to security detection rules.
+
 ---
 
-## Terminology Distinction
+## Terminology & Pipeline Stages
 
-To avoid conflating network state with protocol confirmation:
-- **Discovered Open TCP Ports:** Ports identified by the Phase 1 TCP scanner where a socket accepted connections.
-- **Confirmed / Likely MCP Servers:** Services verified by the Phase 2 multi-layer HTTP JSON-RPC handshake.
+To avoid conflating network state with protocol and auth classification:
+1. **Target Resolver:** Resolves IP ranges (capped at 1024 hosts max).
+2. **Discovered Open TCP Ports:** Ports identified by the TCP connect scanner.
+3. **Confirmed / Likely MCP Servers:** Services verified by the multi-layer HTTP JSON-RPC handshake.
+4. **Auth Audit Status:** `unprotected` (HIGH risk), `protected` (LOW risk), or `unknown` (MEDIUM risk).
 
 ---
 
