@@ -3,7 +3,6 @@ package scanner
 import (
 	"context"
 	"errors"
-	"math"
 	"net"
 	"strconv"
 	"testing"
