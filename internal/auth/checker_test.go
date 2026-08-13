@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -225,7 +227,6 @@ func TestRequestCountDiscipline(t *testing.T) {
 	c := NewChecker(1 * time.Second)
 	_, err := c.CheckAuthBatch(context.Background(), servers)
 
-	// Clean up servers
 	for _, ts := range tsList {
 		ts.Close()
 	}
@@ -241,6 +242,56 @@ func TestRequestCountDiscipline(t *testing.T) {
 			t.Errorf("VIOLATION: Server #%d received %d request(s); strictly MUST be exactly 1 request", i+1, reqCount)
 		}
 	}
+}
+
+// TestAuthChecker_MalformedFuzzResilience executes 1,000 distinct malformed/hostile HTTP responses against CheckAuth with 0 crashes.
+func TestAuthChecker_MalformedFuzzResilience(t *testing.T) {
+	var currentPayload string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(currentPayload))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	c := NewChecker(100 * time.Millisecond)
+
+	payloadTemplates := []string{
+		`{"jsonrpc":"2.0"}`,
+		`{"jsonrpc":"1.0","id":99}`,
+		`{"jsonrpc":"2.0","id":null,"result":{}}`,
+		`<html><body>Server Error 500</body></html>`,
+		`\x00\x01\x02\x03\x04\x05`,
+		`{"jsonrpc":"2.0","id":99,"result":12345}`,
+		`[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]`,
+		`{"a":` + strings.Repeat(`{"b":`, 50) + `1` + strings.Repeat(`}`, 50) + `}`,
+	}
+
+	r := rand.New(rand.NewSource(99))
+
+	for i := 0; i < 1000; i++ {
+		base := payloadTemplates[i%len(payloadTemplates)]
+		currentPayload = base + fmt.Sprintf(" /* auth_fuzz_%d_%d */", i, r.Intn(99999))
+
+		func() {
+			defer func() {
+				if err := recover(); err != nil {
+					t.Fatalf("PANIC on Auth Checker fuzz payload iteration %d: %v", i, err)
+				}
+			}()
+
+			target := types.DiscoveredServer{
+				IP:            host,
+				Port:          port,
+				MCPConfidence: types.ConfidenceConfirmed,
+			}
+			_, _ = c.CheckAuth(context.Background(), target)
+		}()
+	}
+
+	t.Logf("Auth Checker Fuzz Resilience Audit: PASS (0 crashes across 1,000 malformed response payloads)")
 }
 
 func netSplitHostPort(rawURL string) (string, string, error) {

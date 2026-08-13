@@ -251,10 +251,16 @@ func (s *Scanner) ScanPorts(ctx context.Context, targets []string, ports []int) 
 	if concurrency <= 0 {
 		concurrency = 100
 	}
+	if concurrency > 500 {
+		concurrency = 500
+	}
 
 	rateLimit := s.config.RateLimit
 	if rateLimit <= 0 {
 		rateLimit = 500
+	}
+	if rateLimit > 2000 {
+		rateLimit = 2000
 	}
 
 	// Single shared rate limiter across the entire worker pool
