@@ -82,7 +82,7 @@ func main() {
 
 	fmt.Printf("[+] Target Resolver: Resolved %d target host(s)\n", len(targets))
 
-	// 2. TCP Port Scanning
+	// 2. TCP Port Scanning (Phase 1)
 	startScan := time.Now()
 	openPorts, err := sc.ScanPorts(ctx, targets, parsedPorts)
 	if err != nil {
@@ -91,12 +91,27 @@ func main() {
 	}
 	scanDuration := time.Since(startScan)
 
-	fmt.Printf("[+] Port Scanner: Found %d open port(s) across %d targets in %v\n", len(openPorts), len(targets), scanDuration)
+	fmt.Printf("[+] Port Scanner: Discovered %d open TCP port(s) across %d target host(s) in %v\n", len(openPorts), len(targets), scanDuration)
 
-	// Pipeline stubs for downstream modules
+	// 3. MCP Protocol Detection (Phase 2 - 3-Layer Verification)
 	det := detector.NewDetector(cfg.Timeout)
 	discovered, _ := det.DetectBatch(ctx, openPorts)
 
+	var confirmedCount, likelyCount, noneCount int
+	for _, srv := range discovered {
+		switch srv.MCPConfidence {
+		case types.ConfidenceConfirmed:
+			confirmedCount++
+		case types.ConfidenceLikely:
+			likelyCount++
+		default:
+			noneCount++
+		}
+	}
+
+	fmt.Printf("[+] MCP Detector: Identified %d confirmed, %d likely, and %d non-MCP server(s)\n", confirmedCount, likelyCount, noneCount)
+
+	// Downstream module stubs
 	chk := auth.NewChecker(cfg.Timeout)
 	for i, srv := range discovered {
 		discovered[i], _ = chk.CheckAuth(ctx, srv)

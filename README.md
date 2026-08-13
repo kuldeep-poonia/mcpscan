@@ -20,6 +20,21 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a 
 - **Single Shared Rate Limiting:** Global rate limit ticker (`--rate-limit`, default 500 req/sec) shared across all worker goroutines to protect target networks from flooding.
 - **TCP Connect Scanner:** Non-elevated, standard TCP `net.DialTimeout` scanner.
 
+### Phase 2 — 3-Layer HTTP MCP Server Detector
+- **Layer 1 Verification:** Sends JSON-RPC 2.0 `initialize` request and validates `jsonrpc: "2.0"` compliance.
+- **Layer 2 Verification:** Inspects response result for MCP-specific required fields (`protocolVersion`, `capabilities`). Services passing Layer 1+2 are classified as `likely`.
+- **Layer 3 Verification:** Issues secondary probe (`tools/list`) to cross-confirm protocol consistency. Services passing Layer 1+2+3 upgrade to `confirmed`.
+- **Explicit `ConfidenceNone` Classification:** Services failing Layer 1/2 checks (such as Ethereum JSON-RPC nodes or plain HTTP servers) are explicitly classified as `none` rather than silently dropped.
+- **Resilience & Timeout Enforcement:** Handles malformed HTTP responses, memory bomb defenses (1MB response limit), and hanging/slow connection timeouts cleanly.
+
+---
+
+## Terminology Distinction
+
+To avoid conflating network state with protocol confirmation:
+- **Discovered Open TCP Ports:** Ports identified by the Phase 1 TCP scanner where a socket accepted connections.
+- **Confirmed / Likely MCP Servers:** Services verified by the Phase 2 multi-layer HTTP JSON-RPC handshake.
+
 ---
 
 ## Usage Examples
@@ -44,15 +59,15 @@ mcpscan scan --target 10.0.0.15 --ports 3000,5000,8000-8080 --timeout 1s
 ## Known Blind Spots & Limitations
 
 - **Stdio Transport:** MCPScan currently detects HTTP-transport MCP servers only. Stdio-transport servers (e.g., inside IDE plugins) are undetectable via network scanning.
-- **Detection Confidence:** Discovered services are classified with explicit confidence levels (`confirmed`, `likely`, `none`) rather than absolute assumptions.
+- **Detection Confidence:** Discovered services are labeled with explicit confidence levels (`confirmed`, `likely`, `none`) rather than absolute assumptions.
 
 ---
 
 ## Building & Testing
 
 ```bash
-# Run unit tests (with race detector)
-go test -v -race ./...
+# Run unit tests
+go test -v ./...
 
 # Build binary
 go build -o mcpscan main.go
