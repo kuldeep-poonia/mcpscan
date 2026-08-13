@@ -127,6 +127,18 @@ mcpscan report --db audit.db --format json
 
 ---
 
+## Performance & Rate Limiting Notes
+
+- **Predictable Scan Duration:** Scan completion time is directly governed by the global `--rate-limit` flag ($ \text{Total Duration} \approx \frac{\text{Total Ports}}{\text{Rate Limit}} $).
+- **Full Port-Range Duration:** At the default rate limit of `500` req/sec, an exhaustive 65,535 port scan takes approximately **~2 minutes** ($65,535 / 500 \approx 131\text{ seconds}$). This is by design to ensure predictable network consumption and prevent socket exhaustion.
+- **Speeding Up Local-Only Scans:** For fast local scans on high-performance machines (`--local`), you can increase the rate limit up to `2000` req/sec and concurrency to `200` to complete a full 65,535 port scan in **~30–35 seconds**:
+
+```bash
+mcpscan scan --local --ports 1-65535 --rate-limit 2000 --concurrency 200
+```
+
+---
+
 ## CLI Flag Reference
 
 | Flag | Default | Description |
