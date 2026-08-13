@@ -46,7 +46,7 @@ func TestReport_TableFormat(t *testing.T) {
 	}
 
 	// Assert summary line
-	if !strings.Contains(out, "Scan complete. 1 MCP server(s) confirmed, 1 likely") {
+	if !strings.Contains(out, "Scan complete. Confidence: 1 confirmed, 1 likely") {
 		t.Errorf("expected summary line in report, got: %s", out)
 	}
 }

@@ -81,11 +81,12 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, servers []
 
 	var summary string
 	if c.Evaluated == 0 {
-		summary = "Scan complete. 0 MCP server(s) confirmed, 0 likely, 0 unverifiable.\n"
+		summary = fmt.Sprintf("Scan complete. Confidence: %d confirmed, %d likely, %d unverifiable, %d non-MCP.\n",
+			c.Confirmed, c.Likely, c.Unverifiable, c.None)
 	} else {
 		protectedStr := formatProtectedSummary(c.Protected, c.ProtectedLowRisk, c.ProtectedMediumRisk)
-		summary = fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely, %d unverifiable (%d unprotected [%d HIGH risk], %s).\n",
-			c.Confirmed, c.Likely, c.Unverifiable, c.Unprotected, c.HighRisk, protectedStr)
+		summary = fmt.Sprintf("Scan complete. Confidence: %d confirmed, %d likely, %d unverifiable, %d non-MCP. Auth Status: %d unprotected (%d HIGH risk), %s, %d unknown.\n",
+			c.Confirmed, c.Likely, c.Unverifiable, c.None, c.Unprotected, c.HighRisk, protectedStr, c.Unknown)
 	}
 
 	_, err := io.WriteString(w, summary)
