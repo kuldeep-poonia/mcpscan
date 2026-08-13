@@ -20,8 +20,6 @@ func TestTruePositiveRate(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "tools") || r.Body != nil {
-			// Check if method is initialize vs tools/list
-			var req JSONRPCRequest
 			_ = http.MaxBytesReader(w, r.Body, 1024)
 			buf := make([]byte, 1024)
 			n, _ := r.Body.Read(buf)
