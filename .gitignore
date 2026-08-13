@@ -21,3 +21,6 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# Test Servers
+mcp-test-server/
