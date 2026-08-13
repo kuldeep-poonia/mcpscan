@@ -49,6 +49,14 @@ func (c *Checker) CheckAuth(ctx context.Context, server types.DiscoveredServer) 
 	server.AuthConfidence = types.AuthConfidenceLow
 	server.RiskLevel = types.RiskMedium
 
+	// If server required auth on initialize handshake itself -> unverifiable_protected
+	if server.MCPConfidence == types.ConfidenceUnverifiableProtected {
+		server.AuthStatus = types.AuthProtected
+		server.AuthConfidence = types.AuthConfidenceMedium
+		server.RiskLevel = types.RiskMedium
+		return server, nil
+	}
+
 	// If service is not an MCP server (ConfidenceNone), skip probe
 	if server.MCPConfidence == types.ConfidenceNone {
 		server.RiskLevel = types.RiskLow

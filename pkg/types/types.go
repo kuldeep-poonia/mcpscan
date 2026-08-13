@@ -7,9 +7,10 @@ import "time"
 type MCPConfidence string
 
 const (
-	ConfidenceConfirmed MCPConfidence = "confirmed"
-	ConfidenceLikely    MCPConfidence = "likely"
-	ConfidenceNone      MCPConfidence = "none"
+	ConfidenceConfirmed             MCPConfidence = "confirmed"
+	ConfidenceLikely                MCPConfidence = "likely"
+	ConfidenceUnverifiableProtected MCPConfidence = "unverifiable_protected"
+	ConfidenceNone                  MCPConfidence = "none"
 )
 
 // AuthStatus represents the authentication status of a discovered MCP server.
@@ -25,8 +26,9 @@ const (
 type AuthConfidence string
 
 const (
-	AuthConfidenceHigh AuthConfidence = "high"
-	AuthConfidenceLow  AuthConfidence = "low"
+	AuthConfidenceHigh   AuthConfidence = "high"
+	AuthConfidenceMedium AuthConfidence = "medium"
+	AuthConfidenceLow    AuthConfidence = "low"
 )
 
 // RiskLevel represents the security risk level of a discovered server.

@@ -294,6 +294,43 @@ func TestAuthChecker_MalformedFuzzResilience(t *testing.T) {
 	t.Logf("Auth Checker Fuzz Resilience Audit: PASS (0 crashes across 1,000 malformed response payloads)")
 }
 
+// TestCheckAuth_UnverifiableProtected asserts ConfidenceUnverifiableProtected results in AuthProtected, AuthConfidenceMedium, and RiskMedium with 0 HTTP requests.
+func TestCheckAuth_UnverifiableProtected(t *testing.T) {
+	var reqCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reqCount, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	c := NewChecker(100 * time.Millisecond)
+	target := types.DiscoveredServer{
+		IP:            host,
+		Port:          port,
+		MCPConfidence: types.ConfidenceUnverifiableProtected,
+	}
+
+	res, err := c.CheckAuth(context.Background(), target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if atomic.LoadInt32(&reqCount) != 0 {
+		t.Errorf("expected 0 HTTP requests sent for ConfidenceUnverifiableProtected, got %d", atomic.LoadInt32(&reqCount))
+	}
+
+	if res.AuthStatus != types.AuthProtected || res.AuthConfidence != types.AuthConfidenceMedium || res.RiskLevel != types.RiskMedium {
+		t.Errorf("MISMATCH! Got Status=%v, Confidence=%v, Risk=%v; Expected AuthProtected, AuthConfidenceMedium, RiskMedium",
+			res.AuthStatus, res.AuthConfidence, res.RiskLevel)
+	}
+
+	t.Logf("UnverifiableProtected Auth Audit: PASS (Status=%v, Confidence=%v, Risk=%v)", res.AuthStatus, res.AuthConfidence, res.RiskLevel)
+}
+
+
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")
 	trimmed = strings.TrimPrefix(trimmed, "https://")

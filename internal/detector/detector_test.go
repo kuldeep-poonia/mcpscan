@@ -268,6 +268,58 @@ func TestHangingServerTimeoutResilience(t *testing.T) {
 	}
 }
 
+// TestDetector_AuthOnInitializeHandshake asserts 401/403 responses with WWW-Authenticate or JSON body on initialize are classified as ConfidenceUnverifiableProtected.
+func TestDetector_AuthOnInitializeHandshake(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="mcp-server"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"Authentication required"}`))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	d := NewDetector(500 * time.Millisecond)
+	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if srv.MCPConfidence != types.ConfidenceUnverifiableProtected {
+		t.Fatalf("expected ConfidenceUnverifiableProtected for auth-gated initialize probe, got %v", srv.MCPConfidence)
+	}
+
+	t.Logf("Auth-gated initialize handshake test: PASS (Classified as %s)", srv.MCPConfidence)
+}
+
+// TestDetector_AuthNonMCPTrap_HTMLLoginPage asserts 401 responses with HTML login page and no WWW-Authenticate header remain ConfidenceNone.
+func TestDetector_AuthNonMCPTrap_HTMLLoginPage(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`<html><body><h1>401 Unauthorized - Admin Portal Login</h1></body></html>`))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	d := NewDetector(500 * time.Millisecond)
+	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if srv.MCPConfidence != types.ConfidenceNone {
+		t.Fatalf("VIOLATION: Expected ConfidenceNone for HTML login page trap, got %v", srv.MCPConfidence)
+	}
+
+	t.Logf("HTML Login Trap False-Positive Audit: PASS (Classified as %s)", srv.MCPConfidence)
+}
+
+
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")
 	trimmed = strings.TrimPrefix(trimmed, "https://")

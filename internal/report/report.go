@@ -56,13 +56,15 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, servers []
 		return err
 	}
 
-	var confirmed, likely, unprotected, protected, highRisk int
+	var confirmed, likely, unverifiable, unprotected, protected, highRisk int
 	for _, s := range servers {
 		switch s.MCPConfidence {
 		case types.ConfidenceConfirmed:
 			confirmed++
 		case types.ConfidenceLikely:
 			likely++
+		case types.ConfidenceUnverifiableProtected:
+			unverifiable++
 		}
 
 		switch s.AuthStatus {
@@ -98,8 +100,8 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, servers []
 		fmt.Fprintln(w, "")
 	}
 
-	summary := fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely (%d unprotected, %d HIGH risk).\n",
-		confirmed, likely, unprotected, highRisk)
+	summary := fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely, %d unverifiable (%d unprotected, %d HIGH risk).\n",
+		confirmed, likely, unverifiable, unprotected, highRisk)
 	_, err := io.WriteString(w, summary)
 	return err
 }

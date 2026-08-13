@@ -75,6 +75,17 @@ func NewDetector(timeout time.Duration) *Detector {
 	}
 }
 
+// HandshakeAuthError is returned when an initialize request receives HTTP 401 or 403.
+type HandshakeAuthError struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+}
+
+func (e *HandshakeAuthError) Error() string {
+	return fmt.Sprintf("handshake auth required: HTTP %d", e.StatusCode)
+}
+
 // DetectPort evaluates a single open port using the 3-layer verification strategy.
 func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types.DiscoveredServer, error) {
 	srv := types.DiscoveredServer{
@@ -107,7 +118,22 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 
 	respBody, err := d.sendJSONRPC(ctx, url, initReq)
 	if err != nil {
-		// Target failed HTTP handshake or timed out -> ConfidenceNone
+		if authErr, ok := err.(*HandshakeAuthError); ok {
+			hasWWWAuth := authErr.Header.Get("WWW-Authenticate") != ""
+			cType := strings.ToLower(authErr.Header.Get("Content-Type"))
+			isJSONType := strings.Contains(cType, "application/json")
+
+			trimmedBody := strings.TrimSpace(string(authErr.Body))
+			isJSONBody := (strings.HasPrefix(trimmedBody, "{") || strings.HasPrefix(trimmedBody, "[")) && json.Valid(authErr.Body)
+			isHTMLBody := strings.HasPrefix(strings.ToLower(trimmedBody), "<html") || strings.HasPrefix(strings.ToLower(trimmedBody), "<!doctype html")
+
+			// Positive signal: WWW-Authenticate header present OR response body is JSON-shaped
+			if (hasWWWAuth || isJSONType || isJSONBody) && !isHTMLBody {
+				srv.MCPConfidence = types.ConfidenceUnverifiableProtected
+				return srv, nil
+			}
+		}
+		// Target failed HTTP handshake, timed out, or returned HTML login trap -> ConfidenceNone
 		return srv, nil
 	}
 
@@ -215,8 +241,14 @@ func (d *Detector) sendJSONRPC(ctx context.Context, url string, payload JSONRPCR
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		// Read body even on error status to check for JSON-RPC error payload
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		limitedReader := io.LimitReader(resp.Body, maxResponseBodySize)
+		bodyBytes, _ := io.ReadAll(limitedReader)
+		return nil, &HandshakeAuthError{
+			StatusCode: resp.StatusCode,
+			Header:     resp.Header,
+			Body:       bodyBytes,
+		}
 	}
 
 	// Limit reader size to defend against response bombs
