@@ -1,0 +1,23 @@
+# Binary outputs
+mcpscan
+mcpscan.exe
+
+# Database files
+*.db
+*.sqlite
+*.db-journal
+*.sqlite-journal
+
+# Project Spec Docs (excluded from remote repo per instruction.md section 10)
+architecture.md
+build_plan.md
+instruction.md
+qa_testing.md
+
+# OS & Editor cache / junk
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+.vscode/
+.idea/
