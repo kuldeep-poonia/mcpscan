@@ -2,6 +2,7 @@
 package report
 
 import (
+	"fmt"
 	"io"
 
 	"mcpscan/pkg/types"
@@ -28,7 +29,22 @@ func NewReporter(format string) *Reporter {
 
 // Render writes formatted scan results and mandatory limitation disclosure to w.
 func (r *Reporter) Render(w io.Writer, record *types.ScanRecord, servers []types.DiscoveredServer) error {
-	// Stub implementation for Phase 0 skeleton
-	_, err := io.WriteString(w, LimitationNotice+"\nScan complete. 0 servers found (skeleton stub).\n")
+	var confirmed, likely, unprotected, protected int
+	for _, s := range servers {
+		if s.MCPConfidence == types.ConfidenceConfirmed {
+			confirmed++
+		} else if s.MCPConfidence == types.ConfidenceLikely {
+			likely++
+		}
+
+		if s.AuthStatus == types.AuthUnprotected {
+			unprotected++
+		} else if s.AuthStatus == types.AuthProtected {
+			protected++
+		}
+	}
+
+	summary := fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely.\n", confirmed, likely)
+	_, err := io.WriteString(w, LimitationNotice+"\n"+summary)
 	return err
 }

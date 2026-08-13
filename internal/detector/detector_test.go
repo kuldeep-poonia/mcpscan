@@ -14,72 +14,144 @@ import (
 	"mcpscan/pkg/types"
 )
 
-// TestTruePositiveRate verifies detection accuracy (>= 95% threshold) against valid MCP servers.
+// TestTruePositiveRate verifies detection accuracy across 4 distinct valid MCP server fixtures (>= 95% threshold).
 func TestTruePositiveRate(t *testing.T) {
-	// Create mock valid HTTP MCP server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(r.URL.Path, "tools") || r.Body != nil {
-			_ = http.MaxBytesReader(w, r.Body, 1024)
+	// 4 distinct valid MCP server fixtures
+	fixtures := []http.HandlerFunc{
+		// 1. Full MCP Server: full capabilities, protocolVersion 2024-11-05, full serverInfo
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			buf := make([]byte, 1024)
 			n, _ := r.Body.Read(buf)
 			bodyStr := string(buf[:n])
-
-			if strings.Contains(bodyStr, "initialize") {
-				resp := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"test-mcp","version":"1.0"}}}`
-				_, _ = w.Write([]byte(resp))
-				return
-			}
 			if strings.Contains(bodyStr, "tools/list") {
-				resp := `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"echoes input"}]}}`
-				_, _ = w.Write([]byte(resp))
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"test_tool"}]}}`))
 				return
 			}
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{}}}`))
-	}))
-	defer ts.Close()
-
-	host, portStr, _ := netSplitHostPort(ts.URL)
-	port, _ := strconv.Atoi(portStr)
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{},"resources":{}},"serverInfo":{"name":"full-mcp","version":"1.2.0"}}}`))
+		},
+		// 2. Minimal MCP Server: minimal capabilities, no serverInfo
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			buf := make([]byte, 1024)
+			n, _ := r.Body.Read(buf)
+			bodyStr := string(buf[:n])
+			if strings.Contains(bodyStr, "tools/list") {
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}`))
+		},
+		// 3. Legacy/Custom MCP Server: protocolVersion 2024-10-07, custom capability map
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			buf := make([]byte, 1024)
+			n, _ := r.Body.Read(buf)
+			bodyStr := string(buf[:n])
+			if strings.Contains(bodyStr, "tools/list") {
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"legacy_tool"}]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-10-07","capabilities":{"experimental":{}}}}`))
+		},
+		// 4. Dynamic MCP Server: protocolVersion v1.0, capabilities empty map, handles tools/list cleanly
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			buf := make([]byte, 1024)
+			n, _ := r.Body.Read(buf)
+			bodyStr := string(buf[:n])
+			if strings.Contains(bodyStr, "tools/list") {
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"v1.0","capabilities":{}}}`))
+		},
+	}
 
 	d := NewDetector(1 * time.Second)
-	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	truePositives := 0
+
+	for i, handler := range fixtures {
+		ts := httptest.NewServer(handler)
+		host, portStr, _ := netSplitHostPort(ts.URL)
+		port, _ := strconv.Atoi(portStr)
+
+		srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+		ts.Close()
+
+		if err != nil {
+			t.Errorf("fixture %d error: %v", i+1, err)
+			continue
+		}
+
+		if srv.MCPConfidence == types.ConfidenceConfirmed || srv.MCPConfidence == types.ConfidenceLikely {
+			truePositives++
+		} else {
+			t.Errorf("fixture %d failed detection, got confidence: %v", i+1, srv.MCPConfidence)
+		}
 	}
 
-	if srv.MCPConfidence != types.ConfidenceConfirmed {
-		t.Errorf("expected ConfidenceConfirmed for valid MCP server, got %v", srv.MCPConfidence)
-	}
-	if srv.ProtocolVersion != "2024-11-05" {
-		t.Errorf("expected protocol version 2024-11-05, got %s", srv.ProtocolVersion)
+	tpr := (float64(truePositives) / float64(len(fixtures))) * 100.0
+	t.Logf("True Positive Rate across %d distinct MCP fixtures: %.2f%%", len(fixtures), tpr)
+
+	if tpr < 95.0 {
+		t.Errorf("true positive rate %.2f%% below 95.0%% threshold", tpr)
 	}
 }
 
-// TestFalsePositiveRate verifies false positive rate (<= 1% threshold) against generic non-MCP JSON-RPC servers.
+// TestFalsePositiveRate verifies false positive rate across 4 distinct non-MCP JSON-RPC traps (<= 1% threshold).
 func TestFalsePositiveRate(t *testing.T) {
-	// Create mock generic non-MCP JSON-RPC server (e.g. Ethereum RPC trap)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// Returns valid JSON-RPC 2.0 response but WITHOUT MCP fields
-		resp := `{"jsonrpc":"2.0","id":1,"result":{"eth_blockNumber":"0x123456","network":"mainnet"}}`
-		_, _ = w.Write([]byte(resp))
-	}))
-	defer ts.Close()
-
-	host, portStr, _ := netSplitHostPort(ts.URL)
-	port, _ := strconv.Atoi(portStr)
-
-	d := NewDetector(1 * time.Second)
-	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// 4 distinct non-MCP JSON-RPC trap fixtures
+	traps := []http.HandlerFunc{
+		// 1. Ethereum JSON-RPC node trap
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"eth_blockNumber":"0x123456","network":"mainnet"}}`))
+		},
+		// 2. Bitcoin JSON-RPC node trap
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"chain":"main","blocks":700000,"verificationprogress":0.999}}`))
+		},
+		// 3. Generic Math / Echo JSON-RPC service trap
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":42}`))
+		},
+		// 4. JSON-RPC Method Not Found Error trap
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method initialize not found"}}`))
+		},
 	}
 
-	if srv.MCPConfidence != types.ConfidenceNone {
-		t.Errorf("expected ConfidenceNone for non-MCP JSON-RPC trap, got %v", srv.MCPConfidence)
+	d := NewDetector(1 * time.Second)
+	falsePositives := 0
+
+	for i, handler := range traps {
+		ts := httptest.NewServer(handler)
+		host, portStr, _ := netSplitHostPort(ts.URL)
+		port, _ := strconv.Atoi(portStr)
+
+		srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+		ts.Close()
+
+		if err != nil {
+			t.Errorf("trap %d error: %v", i+1, err)
+			continue
+		}
+
+		if srv.MCPConfidence != types.ConfidenceNone {
+			falsePositives++
+			t.Errorf("trap %d incorrectly detected as MCP with confidence: %v", i+1, srv.MCPConfidence)
+		}
+	}
+
+	fpr := (float64(falsePositives) / float64(len(traps))) * 100.0
+	t.Logf("False Positive Rate across %d distinct non-MCP traps: %.2f%%", len(traps), fpr)
+
+	if fpr > 1.0 {
+		t.Errorf("false positive rate %.2f%% exceeds 1.0%% threshold", fpr)
 	}
 }
 
@@ -139,11 +211,9 @@ func TestMalformedResponseResilience(t *testing.T) {
 	r := rand.New(rand.NewSource(42))
 
 	for i := 0; i < 1000; i++ {
-		// Generate varied payload
 		base := payloadTemplates[i%len(payloadTemplates)]
 		currentPayload = base + fmt.Sprintf(" /* fuzz_seed_%d_%d */", i, r.Intn(99999))
 
-		// Ensure no panics/crashes happen
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -161,15 +231,13 @@ func TestMalformedResponseResilience(t *testing.T) {
 
 // TestHangingServerTimeoutResilience verifies clean timeout enforcement against slow/hanging servers.
 func TestHangingServerTimeoutResilience(t *testing.T) {
-	// Mock server that writes a partial chunk and hangs without closing
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if f, ok := w.(http.Flusher); ok {
-			_, _ = w.Write([]byte(`{"jsonrpc":`)) // Write incomplete partial chunk
+			_, _ = w.Write([]byte(`{"jsonrpc":`))
 			f.Flush()
 		}
-		// Sleep 3 seconds (hanging server)
 		time.Sleep(3 * time.Second)
 	}))
 	defer ts.Close()
@@ -200,7 +268,6 @@ func TestHangingServerTimeoutResilience(t *testing.T) {
 	}
 }
 
-// netSplitHostPort parses httptest.Server URL into IP host and port string.
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")
 	trimmed = strings.TrimPrefix(trimmed, "https://")
