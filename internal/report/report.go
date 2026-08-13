@@ -79,10 +79,30 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, servers []
 		fmt.Fprintln(w, "")
 	}
 
-	summary := fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely, %d unverifiable (%d unprotected, %d HIGH risk).\n",
-		c.Confirmed, c.Likely, c.Unverifiable, c.Unprotected, c.HighRisk)
+	var summary string
+	if c.Evaluated == 0 {
+		summary = "Scan complete. 0 MCP server(s) confirmed, 0 likely, 0 unverifiable.\n"
+	} else {
+		protectedStr := formatProtectedSummary(c.Protected, c.ProtectedLowRisk, c.ProtectedMediumRisk)
+		summary = fmt.Sprintf("Scan complete. %d MCP server(s) confirmed, %d likely, %d unverifiable (%d unprotected [%d HIGH risk], %s).\n",
+			c.Confirmed, c.Likely, c.Unverifiable, c.Unprotected, c.HighRisk, protectedStr)
+	}
+
 	_, err := io.WriteString(w, summary)
 	return err
+}
+
+func formatProtectedSummary(total, lowRisk, mediumRisk int) string {
+	if total == 0 {
+		return "0 protected"
+	}
+	if lowRisk > 0 && mediumRisk > 0 {
+		return fmt.Sprintf("%d protected [%d LOW risk, %d MEDIUM risk]", total, lowRisk, mediumRisk)
+	}
+	if mediumRisk > 0 {
+		return fmt.Sprintf("%d protected [%d MEDIUM risk]", total, mediumRisk)
+	}
+	return fmt.Sprintf("%d protected [%d LOW risk]", total, lowRisk)
 }
 
 // renderJSON renders structured JSON payload containing scan metadata and mandatory limitations.
