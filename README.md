@@ -1,5 +1,10 @@
 # MCPScan
 
+[![Go Version](https://img.shields.io/github/go-mod/go-version/kuldeep-poonia/mcpscan?style=flat-square&color=00ADD8)](https://go.dev/)
+[![Latest Release](https://img.shields.io/github/v/release/kuldeep-poonia/mcpscan?style=flat-square&color=green)](https://github.com/kuldeep-poonia/mcpscan/releases)
+[![License: MIT](https://img.shields.io/github/license/kuldeep-poonia/mcpscan?style=flat-square&color=blue)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/kuldeep-poonia/mcpscan?style=flat-square&color=yellow)](https://github.com/kuldeep-poonia/mcpscan/stargazers)
+
 **Local-only Shadow MCP Server Discovery & Auth Audit Tool**
 
 MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a local machine or private network range (CIDR) to discover running Model Context Protocol (MCP) servers, verify them, and audit whether authentication is enforced.
