@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -58,18 +59,61 @@ func main() {
 		Format:      *format,
 	}
 
-	// Instantiate pipeline stubs
-	_ = scanner.NewScanner(cfg)
-	_ = detector.NewDetector(cfg.Timeout)
-	_ = auth.NewChecker(cfg.Timeout)
-	_ = storage.NewStorage(cfg.OutputPath)
-	rep := report.NewReporter(cfg.Format)
-
 	if len(os.Args) == 1 {
 		flag.Usage()
 		os.Exit(0)
 	}
 
-	// For skeleton Phase 0, render initial notice & exiting cleanly
-	_ = rep.Render(os.Stdout, &types.ScanRecord{ToolVersion: Version}, nil)
+	ctx := context.Background()
+
+	// 1. Target Resolution
+	sc := scanner.NewScanner(cfg)
+	targets, err := sc.ResolveTargets(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Target resolution error: %v\n", err)
+		os.Exit(1)
+	}
+
+	parsedPorts, err := scanner.ParsePorts(cfg.Ports)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Port specification error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[+] Target Resolver: Resolved %d target host(s)\n", len(targets))
+
+	// 2. TCP Port Scanning
+	startScan := time.Now()
+	openPorts, err := sc.ScanPorts(ctx, targets, parsedPorts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Port scan error: %v\n", err)
+		os.Exit(1)
+	}
+	scanDuration := time.Since(startScan)
+
+	fmt.Printf("[+] Port Scanner: Found %d open port(s) across %d targets in %v\n", len(openPorts), len(targets), scanDuration)
+
+	// Pipeline stubs for downstream modules
+	det := detector.NewDetector(cfg.Timeout)
+	discovered, _ := det.DetectBatch(ctx, openPorts)
+
+	chk := auth.NewChecker(cfg.Timeout)
+	for i, srv := range discovered {
+		discovered[i], _ = chk.CheckAuth(ctx, srv)
+	}
+
+	store := storage.NewStorage(cfg.OutputPath)
+	_ = store.InitSchema(ctx)
+
+	record := &types.ScanRecord{
+		StartedAt:         startScan,
+		EndedAt:           time.Now(),
+		TargetRange:       cfg.Target,
+		TotalHostsScanned: len(targets),
+		ToolVersion:       Version,
+	}
+	_ = store.SaveScan(ctx, record, discovered)
+
+	rep := report.NewReporter(cfg.Format)
+	_ = rep.Render(os.Stdout, record, discovered)
 }
