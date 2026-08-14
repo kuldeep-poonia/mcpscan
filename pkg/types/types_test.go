@@ -94,3 +94,36 @@ func TestCalculateSummaryCounts_MultiCategoryBatch(t *testing.T) {
 
 	t.Logf("CalculateSummaryCounts multi-category test: PASS (%+v)", c)
 }
+
+// TestCalculateStdioCounts tests aggregation of stdio transport findings.
+func TestCalculateStdioCounts(t *testing.T) {
+	stdioServers := []StdioDiscoveredServer{
+		{
+			SourceTool:    "Claude Desktop",
+			ServerName:    "filesystem",
+			MCPConfidence: ConfidenceConfirmed,
+		},
+		{
+			SourceTool:    "Cursor",
+			ServerName:    "github",
+			MCPConfidence: ConfidenceLikely,
+		},
+		{
+			SourceTool:    "Antigravity",
+			ServerName:    "postgres",
+			MCPConfidence: ConfidenceConfirmed,
+		},
+	}
+
+	confirmed, likely, total := CalculateStdioCounts(stdioServers)
+	if confirmed != 2 {
+		t.Errorf("expected 2 confirmed, got %d", confirmed)
+	}
+	if likely != 1 {
+		t.Errorf("expected 1 likely, got %d", likely)
+	}
+	if total != 3 {
+		t.Errorf("expected 3 total, got %d", total)
+	}
+}
+
