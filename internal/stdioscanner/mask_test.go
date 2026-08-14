@@ -114,3 +114,30 @@ func TestMaskString_LongPathsNotMasked(t *testing.T) {
 	}
 }
 
+// TestMaskString_SlashContainingSecretsMasked asserts that high-entropy secrets containing slashes
+// (e.g. AWS Secret Access Keys or base64 tokens) are correctly MASKED and do not bypass detection.
+func TestMaskString_SlashContainingSecretsMasked(t *testing.T) {
+	slashSecrets := []struct {
+		input       string
+		expectedSub string
+	}{
+		// Real-world AWS Secret Access Key shape with slashes
+		{"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJa...KEY"},
+		// Base64 encoded token with slashes and plus signs
+		{"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=", "AQI...yA="},
+		// Inline CLI argument with slash-containing secret
+		{"--aws-secret=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "--aws-secret=wJa...KEY"},
+	}
+
+	for _, tc := range slashSecrets {
+		got := MaskString(tc.input)
+		if got == tc.input {
+			t.Errorf("SECURITY REGRESSION: MaskString failed to mask slash-containing secret: %q", tc.input)
+		}
+		if got != tc.expectedSub {
+			t.Errorf("MaskString(%q) = %q, expected %q", tc.input, got, tc.expectedSub)
+		}
+	}
+}
+
+

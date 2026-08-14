@@ -65,6 +65,53 @@ func calculateShannonEntropy(s string) float64 {
 	return entropy
 }
 
+// Recognized executable, script, and configuration file extensions in developer tooling.
+var recognizedPathExtensions = []string{
+	".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".json", ".exe",
+	".sh", ".bat", ".cmd", ".ps1", ".rb", ".go", ".bin", ".conf", ".yaml",
+	".yml", ".toml", ".node", ".dll", ".so", ".dylib",
+}
+
+// Recognized standard directory root prefixes across Windows, macOS, and Linux.
+var recognizedPathPrefixes = []string{
+	"/usr/", "/etc/", "/home/", "/opt/", "/var/", "/root/", "/bin/", "/lib/",
+	"~/", "./", "../", "c:\\", "d:\\", "e:\\", "c:/", "d:/", "e:/",
+}
+
+// isLikelyFilesystemPath distinguishes genuine filesystem paths from slash-containing base64 secrets.
+func isLikelyFilesystemPath(s string) bool {
+	if !strings.ContainsAny(s, `/\`) {
+		return false
+	}
+
+	lower := strings.ToLower(s)
+
+	// Check 1: Known absolute or relative root path prefix
+	for _, prefix := range recognizedPathPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	// Windows drive letter check (e.g. F:\, Z:/)
+	if len(lower) >= 3 && lower[1] == ':' && (lower[2] == '\\' || lower[2] == '/') {
+		return true
+	}
+
+	// Check 2: Recognized file extension at the end of the path
+	for _, ext := range recognizedPathExtensions {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+
+	// Check 3: Scoped package identifier (e.g. @modelcontextprotocol/server-filesystem)
+	if strings.HasPrefix(lower, "@") && strings.Count(lower, "/") == 1 && !strings.Contains(lower, "\\") {
+		return true
+	}
+
+	return false
+}
+
 // isHighEntropyToken evaluates whether a standalone string appears to be an API key/token.
 func isHighEntropyToken(s string) bool {
 	// Must be contiguous with no whitespace, length >= 16
@@ -81,12 +128,12 @@ func isHighEntropyToken(s string) bool {
 		return true
 	}
 
-	// Standalone paths containing directory separators are structured filesystem paths, not secret tokens
-	if strings.ContainsAny(s, `/\`) {
+	// Genuine structured filesystem paths are exempted from standalone token masking
+	if isLikelyFilesystemPath(s) {
 		return false
 	}
 
-	// Shannon entropy threshold for generic high-entropy strings (e.g. hex/base64 hashes)
+	// Shannon entropy threshold for generic high-entropy strings (including base64/hex hashes and AWS secrets)
 	return calculateShannonEntropy(s) > 3.2
 }
 
