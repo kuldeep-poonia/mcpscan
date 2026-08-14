@@ -7,34 +7,35 @@
 
 **Local-only Shadow MCP Server Discovery & Auth Audit Tool**
 
-MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a local machine or private network range (CIDR) to discover running Model Context Protocol (MCP) servers, verify them, and audit whether authentication is enforced.
+MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to discover and audit Model Context Protocol (MCP) servers across your private network (HTTP transports) and local AI developer tools (Stdio transports).
 
 > [!IMPORTANT]
-> **Privacy Guarantee:** MCPScan makes zero outbound network calls except to user-specified scan targets. No analytics, no telemetry, no phone-home of any kind.
+> **Privacy Guarantee:** MCPScan makes zero outbound telemetry calls. For local stdio configs, environment variable contents (`env` blocks) are **never stored or displayed** (only their presence is noted), and all inline credentials in CLI arguments are masked before persistence.
 
 ---
 
 ## Features
 
-### Network Discovery
+### Network Discovery (HTTP Transport)
 - **CIDR & IP Target Resolution:** Scans CIDR ranges (e.g. `192.168.1.0/24`) or explicit IP lists.
 - **Safety Host Capping:** Enforces a default cap of 1024 hosts to prevent accidental wide-area scans.
 - **RFC1918 Private Range Protection:** Restricts scanning to loopback (`127.0.0.0/8`) and private RFC1918 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) by default. Public IP scanning requires the `--i-understand-the-risk` override flag.
-- **Flexible Port Specification:** Supports default port lists, custom ranges, discrete port lists, or exhaustive full-range port scans (`1-65535`).
-- **Worker-Pool Concurrency & Global Rate Limiting:** Bounded concurrency pool (`--concurrency`, default 100) and global request rate limiting (`--rate-limit`, default 500 req/sec) to protect target networks from flooding.
-- **TCP Connect Scanner:** Standard TCP socket scanner requiring no root or administrator privileges.
+- **Worker-Pool Concurrency & Global Rate Limiting:** Bounded concurrency pool (`--concurrency`, default 100) and global request rate limiting (`--rate-limit`, default 500 req/sec) to protect target networks.
+- **3-Layer HTTP Verification:** Evaluates services through JSON-RPC 2.0 structure, MCP `protocolVersion`/`capabilities` validation, and secondary method verification.
+- **Single-Request Auth Audit:** Sends **exactly 1 unauthenticated request** per detected HTTP server to audit authentication enforcement without brute-forcing or state alteration.
 
-### MCP Server Detection
-- **Multi-Layer HTTP Verification:** Evaluates services through a 3-layer handshake (Layer 1 JSON-RPC 2.0 structure, Layer 2 MCP `protocolVersion`/`capabilities` validation, Layer 3 secondary method cross-confirmation).
-- **Explicit Non-MCP Classification:** Services failing protocol checks (such as Ethereum nodes or plain web servers) are explicitly classified as `none` rather than silently dropped.
-- **Resilience Controls:** Defends against memory bombs (1MB response size cap) and hanging connection timeouts.
-
-### Authentication Auditing
-- **Single-Request Discipline:** Sends **exactly 1 unauthenticated request** per detected server. No retries, no password lists, no brute-forcing, no auth bypass attempts.
-- **Non-Destructive Audit:** Evaluates authentication enforcement without modifying target server state.
+### Local AI Tool Discovery (Stdio Transport — Opt-in)
+- **Opt-in Stdio Detection:** Enabled via `--include-stdio` to inspect local AI tool configurations.
+- **Known AI Tool Registry:** Checks known configuration paths for **Claude Desktop**, **Cursor**, **Antigravity (Gemini IDE)**, and **VS Code**. No blind filesystem-wide crawling.
+- **3-Layer Stdio Verification:**
+  - **Layer 1:** JSON syntax validity (guarded with a 5MB read limit).
+  - **Layer 2:** Schema structural validation (`mcpServers` object with `command`; `serverUrl` entries are excluded to prevent double-counting).
+  - **Layer 3:** Non-elevated OS process cross-referencing (matches running processes via Windows CIM, Linux `/proc`, or macOS `ps` to upgrade from `likely` to `confirmed`).
+- **Two-Layer Credential Masking:** Sensitive CLI flags, HTTP headers (`Header: Value`), and high-entropy secret tokens embedded in commands/args are partially masked (`sk-...789`), while structured filesystem paths are preserved.
+- **Zero `env` Storage:** Records only `has_env_block: true` when environment variables are present — secret keys and values inside `env` blocks are never read, stored, or displayed.
 
 ### Local Storage & Reporting
-- **Embedded SQLite Persistence:** Stores scan records and server details locally in an embedded SQLite database (`scans` and `discovered_servers` schema).
+- **Embedded SQLite Persistence:** Stores scan records, HTTP servers (`discovered_servers`), and stdio servers (`stdio_discovered_servers`) with foreign key cascade deletion.
 - **Cross-Platform Permission Hardening:** Restricts database file permissions (`0600` on Unix; Windows ACL inheritance stripping via `icacls`).
 - **Multi-Format Output:** Formats reports as clean ASCII tables (`--format table`) or structured JSON (`--format json`).
 - **Offline Report Inspection:** Re-render stored scan results anytime via `mcpscan report --db <path.db> [--format table|json]`.
@@ -45,24 +46,12 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to scan a 
 
 ### Downloading Pre-Built Binaries
 
-Pre-compiled, zero-CGO binaries are available on the [GitHub Releases](https://github.com/kuldeep-poonia/mcpscan/releases/tag/v1.0.0) page:
+Pre-compiled, zero-CGO binaries are available on the [GitHub Releases](https://github.com/kuldeep-poonia/mcpscan/releases) page:
 
 - **Linux (x86_64):** `mcpscan-linux-amd64`
 - **macOS (Intel):** `mcpscan-darwin-amd64`
 - **macOS (Apple Silicon):** `mcpscan-darwin-arm64`
 - **Windows (x86_64):** `mcpscan-windows-amd64.exe`
-
-### Verifying SHA256 Checksums
-
-Download `checksums.txt` along with your binary and verify its integrity:
-
-```bash
-# Linux / macOS
-sha256sum -c checksums.txt --ignore-missing
-
-# Windows (PowerShell)
-Get-FileHash mcpscan-windows-amd64.exe -Algorithm SHA256
-```
 
 ### Building from Source
 
@@ -74,72 +63,45 @@ go build -o mcpscan main.go
 
 ---
 
-## Step-by-Step Usage Guide
+## Usage Guide
 
-### 1. Default Quick Scan (Common Ports)
-If you omit the `--ports` flag, MCPScan automatically scans popular MCP development ports (`8000`, `8080`, `3000`, `5000`, `8081`, `8001`, `8002`, `8888`, `9000`, `9090`, `5001`, `8443`):
+### 1. Default Network Scan (HTTP Transport)
+Scan common local MCP HTTP ports (`8000`, `8080`, `3000`, `5000`, `8081`, `8001`, `8002`, `8888`, `9000`, `9090`):
 
 ```bash
 mcpscan scan --local
 ```
 
-### 2. Scanning Specific Ports or Ranges
-To scan specific ports or custom port ranges, use the `--ports` flag:
+### 2. Full Local Scan (HTTP + Local AI Stdio Configs)
+Discover both network-exposed HTTP MCP servers and local AI tool stdio configs:
 
 ```bash
-# Scan specific discrete ports
-mcpscan scan --local --ports 8001,8002,9000
-
-# Scan a range of ports
-mcpscan scan --local --ports 8000-8500
-
-# Combine discrete ports and ranges
-mcpscan scan --local --ports 3000,5000,8000-8050
+mcpscan scan --local --include-stdio
 ```
 
-### 3. Exhaustive Full Machine Scan (All 65,535 Ports)
-To perform a complete scan across **all 65,535 TCP ports** on your machine:
+### 3. Scanning a Network Subnet (Private CIDR)
+Scan an entire subnet for unauthorized shadow MCP servers:
 
 ```bash
-mcpscan scan --local --ports 1-65535
-```
-
-### 4. Scanning a Network Subnet (Private Range / CIDR)
-To scan an entire local network subnet or range of hosts:
-
-```bash
-# Scan a /24 subnet (up to 256 hosts) with custom rate limit
 mcpscan scan --target 192.168.1.0/24 --concurrency 50 --rate-limit 200 --output corp_scan.db
 ```
 
-### 5. Exporting Structured JSON Output
-To export results directly in JSON format for SIEM or automated security tool integration:
+### 4. Exporting Structured JSON Output
+Export full structured telemetry for SIEM and security pipelines:
 
 ```bash
-mcpscan scan --target 10.0.0.0/28 --format json --output audit.db
+mcpscan scan --local --include-stdio --format json --output audit.db
 ```
 
-### 6. Offline Report Inspection Subcommand
-Re-render previously saved SQLite database scan records anytime without re-scanning the network:
+### 5. Offline Report Inspection Subcommand
+Re-render previously saved SQLite database reports anytime:
 
 ```bash
-# Display formatted summary table from database
-mcpscan report --db corp_scan.db --format table
+# Display formatted ASCII table from database
+mcpscan report --db audit.db --format table
 
 # Display raw JSON report from database
 mcpscan report --db audit.db --format json
-```
-
----
-
-## Performance & Rate Limiting Notes
-
-- **Predictable Scan Duration:** Scan completion time is directly governed by the global `--rate-limit` flag ($ \text{Total Duration} \approx \frac{\text{Total Ports}}{\text{Rate Limit}} $).
-- **Full Port-Range Duration:** At the default rate limit of `500` req/sec, an exhaustive 65,535 port scan takes approximately **~2 minutes** ($65,535 / 500 \approx 131\text{ seconds}$). This is by design to ensure predictable network consumption and prevent socket exhaustion.
-- **Speeding Up Local-Only Scans:** For fast local scans on high-performance machines (`--local`), you can increase the rate limit up to `2000` req/sec and concurrency to `200` to complete a full 65,535 port scan in **~30–35 seconds**:
-
-```bash
-mcpscan scan --local --ports 1-65535 --rate-limit 2000 --concurrency 200
 ```
 
 ---
@@ -150,7 +112,8 @@ mcpscan scan --local --ports 1-65535 --rate-limit 2000 --concurrency 200
 |---|---|---|
 | `--target` | `127.0.0.1` | Target IP address or CIDR subnet (e.g. `192.168.1.0/24`). |
 | `--local` | `false` | Quick flag alias to target `127.0.0.1`. |
-| `--ports` | *Common MCP ports* | Port specification: list (`8000,8080`), range (`8000-8500`), or full (`1-65535`). |
+| `--include-stdio` | `false` | Discover local stdio-transport MCP servers from AI tool configs. |
+| `--ports` | *Common ports* | Port specification: list (`8000,8080`), range (`8000-8500`), or full (`1-65535`). |
 | `--concurrency` | `100` | Worker pool concurrency count (max `500`). |
 | `--rate-limit` | `500` | Global request rate limit in req/sec (max `2000`). |
 | `--timeout` | `2s` | Network socket dial and HTTP context timeout duration. |
@@ -161,24 +124,31 @@ mcpscan scan --local --ports 1-65535 --rate-limit 2000 --concurrency 200
 
 ---
 
-## Understanding the Output
+## Understanding Confidence & Auth Taxonomies
 
-### MCP Confidence Levels
-- **`confirmed`:** Server passed all 3 verification layers (valid JSON-RPC 2.0, MCP capabilities/protocolVersion, and secondary probe).
+### HTTP Confidence Levels
+- **`confirmed`:** Server passed all 3 verification layers (JSON-RPC 2.0, MCP capabilities, secondary probe).
 - **`likely`:** Server passed Layer 1 & Layer 2 checks.
-- **`none`:** Service did not respond with valid MCP JSON-RPC protocol fields (e.g. Ethereum RPC nodes, plain web servers).
+- **`unverifiable_protected`:** Server returned HTTP 401/403 with `WWW-Authenticate` or JSON body on initial handshake. Authentication prevents probing internal MCP capabilities.
+- **`none`:** Service did not respond with valid MCP protocol fields (e.g. Ethereum nodes, plain web servers).
 
-### Authentication Status & Risk Levels
-- **`unprotected` / `HIGH` Risk:** Server responded with a full tool list to unauthenticated requests. Immediate security attention required.
-- **`protected` / `LOW` Risk:** Server returned HTTP 401 Unauthorized or 403 Forbidden to unauthenticated requests. Authentication is enforced.
-- **`unknown` / `MEDIUM` Risk:** Server returned an ambiguous response or a network timeout occurred during probing.
+### Stdio Confidence Levels
+- **`confirmed`:** Configured stdio server matches an active running OS process with aligned arguments.
+- **`likely`:** Structurally valid stdio server configuration found in an AI tool config, but currently dormant (no matching running process).
+
+### Authentication Status & Risk Levels (HTTP)
+- **`unprotected` / `HIGH` Risk:** Server responded with a full tool list to unauthenticated requests. Immediate remediation required.
+- **`protected` / `LOW` Risk:** Server returned HTTP 401 Unauthorized or 403 Forbidden to unauthenticated requests.
+- **`unknown` / `MEDIUM` Risk:** Server returned an ambiguous response or timed out during probing.
 
 ---
 
-## Known Limitations
+## Known Limitations & Scope Disclosure
 
-- **Stdio Transport Blind Spot:** MCPScan detects HTTP-transport MCP servers only. Stdio-transport servers (e.g., inside IDE plugins) are undetectable via network scanning.
-- **Confidence Model:** Discovered services are labeled with explicit confidence levels (`confirmed`, `likely`, `none`) rather than absolute assumptions.
+- **Transport Scope:** Stdio detection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); it does not perform blind filesystem-wide searches.
+- **Path Verification:** Some platform configuration paths (Cursor across OSs, and macOS/Linux variants) are inferred from convention and pending community verification. *If a config path differs for your environment, please open a GitHub issue with your tool and OS path details.*
+- **Process Matching:** Process cross-referencing uses non-elevated OS inspection and is best-effort/heuristic.
+- **Zero Credential Exposure:** Secret keys in CLI arguments are masked, and environment variables are never stored or logged.
 
 ---
 
@@ -190,8 +160,8 @@ Requirements: Go 1.21 or later.
 # Run unit tests
 go test -v ./...
 
-# Cross-compile release binaries
-make cross-build
+# Build local binary
+go build -o mcpscan main.go
 ```
 
 ---
@@ -199,3 +169,4 @@ make cross-build
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
