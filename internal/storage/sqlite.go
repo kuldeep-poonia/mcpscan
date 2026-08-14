@@ -74,6 +74,22 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 		detected_at TEXT NOT NULL,
 		FOREIGN KEY (scan_id) REFERENCES scans(id) ON DELETE CASCADE
 	);
+
+	CREATE TABLE IF NOT EXISTS stdio_discovered_servers (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		scan_id INTEGER NOT NULL,
+		source_tool TEXT NOT NULL,
+		config_file TEXT NOT NULL,
+		server_name TEXT NOT NULL,
+		command TEXT NOT NULL,
+		args_summary TEXT,
+		has_env_block INTEGER NOT NULL,
+		mcp_confidence TEXT NOT NULL,
+		process_match_found INTEGER NOT NULL,
+		matched_pid INTEGER,
+		detected_at TEXT NOT NULL,
+		FOREIGN KEY (scan_id) REFERENCES scans(id) ON DELETE CASCADE
+	);
 	`
 
 	if _, err := db.ExecContext(ctx, schema); err != nil {
@@ -161,7 +177,134 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 	return nil
 }
 
-// GetLastScan retrieves the most recent scan record and its discovered servers.
+// SaveStdioDiscoveredServers persists a batch of stdio discovered servers for an existing scan ID.
+func (s *Storage) SaveStdioDiscoveredServers(ctx context.Context, scanID int64, servers []types.StdioDiscoveredServer) error {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning stdio transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	query := `
+	INSERT INTO stdio_discovered_servers (scan_id, source_tool, config_file, server_name, command, args_summary, has_env_block, mcp_confidence, process_match_found, matched_pid, detected_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	`
+	stmt, err := tx.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("preparing stdio server insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for i := range servers {
+		servers[i].ScanID = scanID
+		hasEnvInt := 0
+		if servers[i].HasEnvBlock {
+			hasEnvInt = 1
+		}
+		procMatchInt := 0
+		if servers[i].ProcessMatchFound {
+			procMatchInt = 1
+		}
+
+		var pidVal interface{}
+		if servers[i].ProcessMatchFound && servers[i].MatchedPID > 0 {
+			pidVal = servers[i].MatchedPID
+		} else {
+			pidVal = nil
+		}
+
+		_, err := stmt.ExecContext(ctx,
+			scanID,
+			servers[i].SourceTool,
+			servers[i].ConfigFile,
+			servers[i].ServerName,
+			servers[i].Command,
+			servers[i].ArgsSummary,
+			hasEnvInt,
+			string(servers[i].MCPConfidence),
+			procMatchInt,
+			pidVal,
+			servers[i].DetectedAt.Format("2006-01-02T15:04:05.999999999Z07:00"),
+		)
+		if err != nil {
+			return fmt.Errorf("inserting stdio server: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing stdio transaction: %w", err)
+	}
+
+	s.restrictFilePermissions()
+	return nil
+}
+
+// GetStdioDiscoveredServers retrieves all stdio servers associated with a specific scan ID.
+func (s *Storage) GetStdioDiscoveredServers(ctx context.Context, scanID int64) ([]types.StdioDiscoveredServer, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+	SELECT id, scan_id, source_tool, config_file, server_name, command, args_summary, has_env_block, mcp_confidence, process_match_found, matched_pid, detected_at
+	FROM stdio_discovered_servers
+	WHERE scan_id = ?
+	ORDER BY id ASC;
+	`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("querying stdio servers: %w", err)
+	}
+	defer rows.Close()
+
+	var servers []types.StdioDiscoveredServer
+	for rows.Next() {
+		var srv types.StdioDiscoveredServer
+		var hasEnvInt, procMatchInt int
+		var pidNull sql.NullInt64
+		var mcpConf, detTimeStr string
+
+		if err := rows.Scan(
+			&srv.ID,
+			&srv.ScanID,
+			&srv.SourceTool,
+			&srv.ConfigFile,
+			&srv.ServerName,
+			&srv.Command,
+			&srv.ArgsSummary,
+			&hasEnvInt,
+			&mcpConf,
+			&procMatchInt,
+			&pidNull,
+			&detTimeStr,
+		); err != nil {
+			return nil, fmt.Errorf("scanning stdio server row: %w", err)
+		}
+
+		srv.HasEnvBlock = (hasEnvInt == 1)
+		srv.ProcessMatchFound = (procMatchInt == 1)
+		srv.MCPConfidence = types.MCPConfidence(mcpConf)
+		if pidNull.Valid {
+			srv.MatchedPID = int(pidNull.Int64)
+		}
+		servers = append(servers, srv)
+	}
+
+	return servers, nil
+}
+
+// GetLastScan retrieves the most recent scan record and its discovered HTTP and Stdio servers.
 func (s *Storage) GetLastScan(ctx context.Context) (*types.ScanRecord, []types.DiscoveredServer, error) {
 	db, err := s.openDB()
 	if err != nil {

@@ -130,10 +130,101 @@ func TestStorage_FilePermissionCheck(t *testing.T) {
 
 	info, err := os.Stat(dbPath)
 	if err != nil {
-		t.Fatalf("failed to stat db file: %v", err)
+		t.Fatalf("expected DB file to exist: %v", err)
 	}
 
 	if info.Size() == 0 {
-		t.Errorf("expected non-zero db file size")
+		t.Errorf("expected DB file size > 0 bytes, got %d", info.Size())
+	}
+}
+
+// TestStorage_StdioWriteAndCascadeDelete verifies write/read roundtrip for stdio servers and cascade deletion.
+func TestStorage_StdioWriteAndCascadeDelete(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_stdio_fk.db")
+
+	store := NewStorage(dbPath)
+	ctx := context.Background()
+
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("failed to initialize schema: %v", err)
+	}
+
+	record := &types.ScanRecord{
+		StartedAt:         time.Now().Add(-5 * time.Second),
+		EndedAt:           time.Now(),
+		TargetRange:       "127.0.0.1",
+		TotalHostsScanned: 1,
+		ToolVersion:       "v2.0.0-test",
+	}
+
+	if err := store.SaveScan(ctx, record, nil); err != nil {
+		t.Fatalf("failed to save parent scan: %v", err)
+	}
+
+	stdioServers := []types.StdioDiscoveredServer{
+		{
+			SourceTool:        "Claude Desktop",
+			ConfigFile:        "/Users/test/claude_desktop_config.json",
+			ServerName:        "filesystem",
+			Command:           "npx",
+			ArgsSummary:       "-y @modelcontextprotocol/server-filesystem /tmp",
+			HasEnvBlock:       false,
+			MCPConfidence:     types.ConfidenceConfirmed,
+			ProcessMatchFound: true,
+			MatchedPID:        12345,
+			DetectedAt:        time.Now().Truncate(time.Millisecond),
+		},
+		{
+			SourceTool:        "Cursor",
+			ConfigFile:        "/Users/test/.cursor/mcp.json",
+			ServerName:        "postgres",
+			Command:           "node",
+			ArgsSummary:       "index.js --port 5432",
+			HasEnvBlock:       true,
+			MCPConfidence:     types.ConfidenceLikely,
+			ProcessMatchFound: false,
+			DetectedAt:        time.Now().Truncate(time.Millisecond),
+		},
+	}
+
+	if err := store.SaveStdioDiscoveredServers(ctx, record.ID, stdioServers); err != nil {
+		t.Fatalf("failed to save stdio servers: %v", err)
+	}
+
+	// 1. Verify readback
+	retrieved, err := store.GetStdioDiscoveredServers(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("failed to get stdio servers: %v", err)
+	}
+	if len(retrieved) != 2 {
+		t.Fatalf("expected 2 stdio servers, got %d", len(retrieved))
+	}
+	if retrieved[0].ServerName != "filesystem" || !retrieved[0].ProcessMatchFound || retrieved[0].MatchedPID != 12345 {
+		t.Errorf("stdio server 0 mismatch: %+v", retrieved[0])
+	}
+	if retrieved[1].ServerName != "postgres" || retrieved[1].ProcessMatchFound || !retrieved[1].HasEnvBlock {
+		t.Errorf("stdio server 1 mismatch: %+v", retrieved[1])
+	}
+
+	// 2. Verify Foreign Key Cascade Delete
+	db, err := store.openDB()
+	if err != nil {
+		t.Fatalf("failed to open DB: %v", err)
+	}
+	defer db.Close()
+
+	// Delete parent scan record
+	if _, err := db.ExecContext(ctx, "DELETE FROM scans WHERE id = ?;", record.ID); err != nil {
+		t.Fatalf("failed to delete scan record: %v", err)
+	}
+
+	// Assert stdio_discovered_servers were cascaded and deleted automatically
+	cascaded, err := store.GetStdioDiscoveredServers(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("error checking cascaded stdio servers: %v", err)
+	}
+	if len(cascaded) != 0 {
+		t.Fatalf("CASCADE VIOLATION: expected 0 cascaded stdio servers, found %d", len(cascaded))
 	}
 }

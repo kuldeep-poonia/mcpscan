@@ -20,10 +20,15 @@ var sensitiveKeyTerms = []string{
 	"api_key",
 	"access_token",
 	"private_key",
+	"authorization",
+	"cookie",
 }
 
 // Regex to identify key=value or --flag=value patterns in CLI arguments or command strings.
 var keyValueArgRegex = regexp.MustCompile(`(?i)^(--?[\w\.\-]+|[\w\.\-]+)=(.+)$`)
+
+// Regex to identify HTTP header syntax (e.g. "X-Goog-Api-Key: AQ.123...", "Authorization: Bearer xyz...")
+var headerKeyValueRegex = regexp.MustCompile(`(?i)^([\w\.\-]+):\s*(.+)$`)
 
 // MaskValue applies partial masking to a sensitive value string.
 // If length > 8: preserves first 3 and last 3 characters (e.g. "sk-...a1b").
@@ -109,6 +114,12 @@ func isLikelyFilesystemPath(s string) bool {
 		return true
 	}
 
+	// Check 4: Standard MIME types (e.g. application/json, text/plain)
+	if strings.HasPrefix(lower, "application/") || strings.HasPrefix(lower, "text/") ||
+		strings.HasPrefix(lower, "multipart/") || strings.HasPrefix(lower, "image/") {
+		return true
+	}
+
 	return false
 }
 
@@ -144,12 +155,22 @@ func MaskString(s string) string {
 		return ""
 	}
 
-	// Layer 1: Key=Value or --Flag=Value heuristic
+	// Layer 1a: Key=Value or --Flag=Value heuristic
 	if matches := keyValueArgRegex.FindStringSubmatch(s); len(matches) == 3 {
 		key := matches[1]
 		val := matches[2]
 		if isSensitiveKey(key) || isHighEntropyToken(val) {
 			return key + "=" + MaskValue(val)
+		}
+		return s
+	}
+
+	// Layer 1b: Header-Name: Value heuristic (e.g. "X-Goog-Api-Key: AQ.Ab8...", "Authorization: Bearer ...")
+	if matches := headerKeyValueRegex.FindStringSubmatch(s); len(matches) == 3 {
+		key := matches[1]
+		val := matches[2]
+		if isSensitiveKey(key) || isHighEntropyToken(val) {
+			return key + ": " + MaskValue(val)
 		}
 		return s
 	}

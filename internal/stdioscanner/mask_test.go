@@ -140,4 +140,25 @@ func TestMaskString_SlashContainingSecretsMasked(t *testing.T) {
 	}
 }
 
+// TestMaskString_HTTPHeaderSyntax asserts that inline HTTP header arguments (e.g. Header: Value) are masked.
+func TestMaskString_HTTPHeaderSyntax(t *testing.T) {
+	headers := []struct {
+		input       string
+		expectedSub string
+	}{
+		{"X-Custom-Api-Key: FAKE_KEY_EXAMPLE_1234567890abcdef", "X-Custom-Api-Key: FAK...def"},
+		{"Authorization: Bearer mySecretAccessToken1234567890", "Authorization: Bea...890"},
+		{"Cookie: session_id=secretCookieValue1234567890", "Cookie: ses...890"},
+		{"Content-Type: application/json", "Content-Type: application/json"},
+	}
+
+	for _, tc := range headers {
+		got := MaskString(tc.input)
+		if got != tc.expectedSub {
+			t.Errorf("MaskString(%q) = %q, expected %q", tc.input, got, tc.expectedSub)
+		}
+	}
+}
+
+
 

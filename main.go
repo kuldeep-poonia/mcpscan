@@ -11,11 +11,13 @@ import (
 	"mcpscan/internal/detector"
 	"mcpscan/internal/report"
 	"mcpscan/internal/scanner"
+	"mcpscan/internal/stdioscanner"
 	"mcpscan/internal/storage"
 	"mcpscan/pkg/types"
+	"runtime"
 )
 
-const Version = "v1.0.0-dev"
+const Version = "v2.0.0-dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "report" {
@@ -33,6 +35,7 @@ func main() {
 	rateLimit := scanCmd.Int("rate-limit", 500, "Maximum requests per second limit")
 	output := scanCmd.String("output", "mcpscan.db", "SQLite database output path")
 	format := scanCmd.String("format", "table", "Output report format (table|json)")
+	includeStdio := scanCmd.Bool("include-stdio", false, "Discover local stdio-transport MCP servers from AI tool configs")
 	allowPublic := scanCmd.Bool("i-understand-the-risk", false, "Allow scanning public non-RFC1918 ranges")
 	versionFlag := scanCmd.Bool("version", false, "Print MCPScan version and exit")
 
@@ -65,15 +68,16 @@ func main() {
 	}
 
 	cfg := types.ScanConfig{
-		Target:      *target,
-		LocalOnly:   *local,
-		Ports:       *ports,
-		Timeout:     *timeout,
-		Concurrency: *concurrency,
-		RateLimit:   *rateLimit,
-		OutputPath:  *output,
-		AllowPublic: *allowPublic,
-		Format:      *format,
+		Target:       *target,
+		LocalOnly:    *local,
+		Ports:        *ports,
+		Timeout:      *timeout,
+		Concurrency:  *concurrency,
+		RateLimit:    *rateLimit,
+		OutputPath:   *output,
+		IncludeStdio: *includeStdio,
+		AllowPublic:  *allowPublic,
+		Format:       *format,
 	}
 
 	ctx := context.Background()
@@ -124,7 +128,21 @@ func main() {
 			authCounts.Evaluated, authCounts.Unprotected, protectedStr, authCounts.Unknown)
 	}
 
-	// 5. Storage (Phase 4 - SQLite Persistence)
+	// 5. Stdio Transport Detection (v2 - Opt-in)
+	var stdioDiscovered []types.StdioDiscoveredServer
+	if cfg.IncludeStdio {
+		stdioDet := stdioscanner.NewDetector(nil)
+		stdioDiscovered, err = stdioDet.DetectLocal(ctx, runtime.GOOS, os.Getenv)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] Stdio detector error: %v\n", err)
+		} else {
+			stdioCounts := types.CalculateSummaryCounts(nil, stdioDiscovered)
+			fmt.Printf("[+] Stdio Detector: Discovered %d server(s) across local AI tool configs (%d running, %d dormant)\n",
+				stdioCounts.StdioTotal, stdioCounts.StdioConfirmed, stdioCounts.StdioLikely)
+		}
+	}
+
+	// 6. Storage (SQLite Persistence)
 	store := storage.NewStorage(cfg.OutputPath)
 	if err := store.InitSchema(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Storage schema initialization error: %v\n", err)
@@ -144,11 +162,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	if len(stdioDiscovered) > 0 {
+		if err := store.SaveStdioDiscoveredServers(ctx, record.ID, stdioDiscovered); err != nil {
+			fmt.Fprintf(os.Stderr, "Storage stdio write error: %v\n", err)
+		}
+	}
+
 	fmt.Printf("[+] Storage: Persisted scan #%d results to %s\n\n", record.ID, cfg.OutputPath)
 
-	// 6. Reporter (Phase 4 - Table / JSON Rendering)
+	// 7. Reporter (Table / JSON Rendering)
 	rep := report.NewReporter(cfg.Format)
-	_ = rep.Render(os.Stdout, record, auditedServers)
+	_ = rep.Render(os.Stdout, record, auditedServers, stdioDiscovered)
 }
 
 func runReportSubcommand(args []string) {
@@ -173,8 +197,10 @@ func runReportSubcommand(args []string) {
 		os.Exit(1)
 	}
 
+	stdioServers, _ := store.GetStdioDiscoveredServers(ctx, record.ID)
+
 	rep := report.NewReporter(*format)
-	_ = rep.Render(os.Stdout, record, servers)
+	_ = rep.Render(os.Stdout, record, servers, stdioServers)
 }
 
 func formatProtectedSummary(total, lowRisk, mediumRisk int) string {
