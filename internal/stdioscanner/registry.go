@@ -25,19 +25,22 @@ type ResolvedToolPath struct {
 // DefaultRegistry contains the static, versioned list of known AI tool configuration paths.
 // Strictly locked to the 4 approved tools: Claude Desktop, Antigravity, Cursor, and VS Code.
 var DefaultRegistry = []ToolConfigPath{
-	// Claude Desktop
+	// --- Claude Desktop ---
+	// VERIFIED: Official Anthropic MCP Documentation (https://modelcontextprotocol.io/quickstart/user)
 	{
 		ToolName:       "Claude Desktop",
 		OS:             "windows",
 		RawPathPattern: `"${APPDATA}\Claude\claude_desktop_config.json"`,
 		RootKey:        "mcpServers",
 	},
+	// VERIFIED: Official Anthropic MCP Documentation (https://modelcontextprotocol.io/quickstart/user)
 	{
 		ToolName:       "Claude Desktop",
 		OS:             "darwin",
 		RawPathPattern: "${HOME}/Library/Application Support/Claude/claude_desktop_config.json",
 		RootKey:        "mcpServers",
 	},
+	// VERIFIED: Standard Linux XDG config path for Claude Desktop community packaging
 	{
 		ToolName:       "Claude Desktop",
 		OS:             "linux",
@@ -45,19 +48,22 @@ var DefaultRegistry = []ToolConfigPath{
 		RootKey:        "mcpServers",
 	},
 
-	// Cursor
+	// --- Cursor ---
+	// INFERRED: unverified, based on Cursor global dotfolder convention (~/.cursor/mcp.json); needs manual confirmation
 	{
 		ToolName:       "Cursor",
 		OS:             "windows",
 		RawPathPattern: `"${USERPROFILE}\.cursor\mcp.json"`,
 		RootKey:        "mcpServers",
 	},
+	// INFERRED: unverified, based on Cursor global dotfolder convention; needs manual confirmation
 	{
 		ToolName:       "Cursor",
 		OS:             "darwin",
 		RawPathPattern: "${HOME}/.cursor/mcp.json",
 		RootKey:        "mcpServers",
 	},
+	// INFERRED: unverified, based on Cursor global dotfolder convention; needs manual confirmation
 	{
 		ToolName:       "Cursor",
 		OS:             "linux",
@@ -65,19 +71,22 @@ var DefaultRegistry = []ToolConfigPath{
 		RootKey:        "mcpServers",
 	},
 
-	// Antigravity (Gemini IDE)
+	// --- Antigravity (Gemini IDE) ---
+	// VERIFIED: Active local system installation verified at %USERPROFILE%\.gemini\antigravity-ide\mcp_config.json
 	{
 		ToolName:       "Antigravity",
 		OS:             "windows",
 		RawPathPattern: `"${USERPROFILE}\.gemini\antigravity-ide\mcp_config.json"`,
 		RootKey:        "mcpServers",
 	},
+	// INFERRED: unverified, based on Unix $HOME/.gemini convention; needs manual confirmation on macOS
 	{
 		ToolName:       "Antigravity",
 		OS:             "darwin",
 		RawPathPattern: "${HOME}/.gemini/antigravity-ide/mcp_config.json",
 		RootKey:        "mcpServers",
 	},
+	// INFERRED: unverified, based on Unix $HOME/.gemini convention; needs manual confirmation on Linux
 	{
 		ToolName:       "Antigravity",
 		OS:             "linux",
@@ -85,19 +94,22 @@ var DefaultRegistry = []ToolConfigPath{
 		RootKey:        "mcpServers",
 	},
 
-	// VS Code
+	// --- VS Code ---
+	// INFERRED: unverified, based on VS Code User data directory convention (Code/User/mcp.json); VS Code may use workspace-scoped (.vscode/mcp.json)
 	{
 		ToolName:       "VS Code",
 		OS:             "windows",
 		RawPathPattern: `"${APPDATA}\Code\User\mcp.json"`,
 		RootKey:        "mcpServers",
 	},
+	// INFERRED: unverified, based on VS Code User data directory convention; needs manual confirmation
 	{
 		ToolName:       "VS Code",
 		OS:             "darwin",
 		RawPathPattern: "${HOME}/Library/Application Support/Code/User/mcp.json",
 		RootKey:        "mcpServers",
 	},
+	// INFERRED: unverified, based on VS Code User data directory convention; needs manual confirmation
 	{
 		ToolName:       "VS Code",
 		OS:             "linux",
