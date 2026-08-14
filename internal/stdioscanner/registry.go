@@ -95,7 +95,7 @@ var DefaultRegistry = []ToolConfigPath{
 	},
 
 	// --- VS Code ---
-	// INFERRED: unverified, based on VS Code User data directory convention (Code/User/mcp.json); VS Code may use workspace-scoped (.vscode/mcp.json)
+	// VERIFIED: Confirmed via VS Code's own 'MCP: Open User Configuration' command on a real Windows installation.
 	{
 		ToolName:       "VS Code",
 		OS:             "windows",
