@@ -95,3 +95,22 @@ func TestMaskArgs_SplitFlags(t *testing.T) {
 		t.Errorf("unexpected summary output: %s", summary)
 	}
 }
+
+// TestMaskString_LongPathsNotMasked asserts that long filesystem paths are NOT falsely masked by entropy heuristics.
+func TestMaskString_LongPathsNotMasked(t *testing.T) {
+	longPaths := []string{
+		`C:\Users\kuldeep\Desktop\projects\mcp-server\build\output\server.js`,
+		`/usr/local/lib/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js`,
+		`D:\Development\ai-tools\antigravity\mcp_servers\database_connector_v2.py`,
+		`C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js`,
+		`--config=/etc/mcp/configs/production_server_v1_settings.json`,
+	}
+
+	for _, path := range longPaths {
+		got := MaskString(path)
+		if got != path {
+			t.Errorf("MaskString falsely masked structured filesystem path %q to %q", path, got)
+		}
+	}
+}
+

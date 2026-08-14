@@ -1,6 +1,7 @@
 package stdioscanner
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,3 +110,72 @@ func TestReadConfigFile_SizeLimit(t *testing.T) {
 		t.Errorf("expected size limit error message, got: %v", err)
 	}
 }
+
+// TestZeroRawSecretLeakage_FullPipelineAudit strictly asserts that raw API keys, passwords, and tokens
+// NEVER leak into any parsed struct field or serialized JSON representation.
+func TestZeroRawSecretLeakage_FullPipelineAudit(t *testing.T) {
+	rawSecretKey := "sk-ant-api03-PROD_SUPER_SECRET_KEY_99999999"
+	rawEnvToken := "ghp_VERY_CONFIDENTIAL_PERSONAL_ACCESS_TOKEN_8888"
+	rawPassword := "DatabaseRootPasswordXYZ123456!"
+
+	configWithSecrets := `{
+		"mcpServers": {
+			"secure-service": {
+				"command": "python",
+				"args": [
+					"start.py",
+					"--api-key=` + rawSecretKey + `",
+					"--password=` + rawPassword + `"
+				],
+				"env": {
+					"GITHUB_TOKEN": "` + rawEnvToken + `",
+					"DATABASE_URL": "postgresql://user:` + rawPassword + `@localhost:5432/prod"
+				}
+			}
+		}
+	}`
+
+	parsed, err := ParseConfigFile([]byte(configWithSecrets), "mcpServers")
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+
+	if len(parsed) != 1 {
+		t.Fatalf("expected 1 parsed server, got %d", len(parsed))
+	}
+
+	srv := parsed[0]
+
+	// 1. Assert raw secrets do not exist in any string field
+	if strings.Contains(srv.Command, rawSecretKey) || strings.Contains(srv.Command, rawPassword) {
+		t.Fatalf("CRITICAL SECURITY LEAK: raw secret leaked into Command field: %s", srv.Command)
+	}
+	if strings.Contains(srv.ArgsSummary, rawSecretKey) || strings.Contains(srv.ArgsSummary, rawPassword) || strings.Contains(srv.ArgsSummary, rawEnvToken) {
+		t.Fatalf("CRITICAL SECURITY LEAK: raw secret leaked into ArgsSummary field: %s", srv.ArgsSummary)
+	}
+
+	// 2. Assert env block presence is marked true without any content
+	if !srv.HasEnvBlock {
+		t.Errorf("expected HasEnvBlock=true, got false")
+	}
+
+	// 3. Serialize to JSON and assert zero raw secret substrings exist in JSON payload
+	jsonBytes, err := json.Marshal(srv)
+	if err != nil {
+		t.Fatalf("failed to marshal parsed server: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	if strings.Contains(jsonStr, rawSecretKey) {
+		t.Fatalf("CRITICAL SECURITY LEAK: JSON output contains raw secret key: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, rawEnvToken) {
+		t.Fatalf("CRITICAL SECURITY LEAK: JSON output contains raw env token: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, rawPassword) {
+		t.Fatalf("CRITICAL SECURITY LEAK: JSON output contains raw password: %s", jsonStr)
+	}
+
+	t.Logf("Zero Raw Secret Leakage Audit: PASS (Sanitized JSON: %s)", jsonStr)
+}
+

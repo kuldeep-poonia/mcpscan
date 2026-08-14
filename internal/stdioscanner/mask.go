@@ -72,12 +72,18 @@ func isHighEntropyToken(s string) bool {
 		return false
 	}
 
-	// Common prefix patterns (e.g. sk-, ghp_, gho_, xoxb-, ey...)
 	lower := strings.ToLower(s)
+
+	// Common credential prefix patterns (e.g. sk-, ghp_, gho_, xoxb-, ey...)
 	if strings.HasPrefix(lower, "sk-") || strings.HasPrefix(lower, "ghp_") ||
 		strings.HasPrefix(lower, "gho_") || strings.HasPrefix(lower, "xox") ||
 		strings.HasPrefix(lower, "eyj") {
 		return true
+	}
+
+	// Standalone paths containing directory separators are structured filesystem paths, not secret tokens
+	if strings.ContainsAny(s, `/\`) {
+		return false
 	}
 
 	// Shannon entropy threshold for generic high-entropy strings (e.g. hex/base64 hashes)
