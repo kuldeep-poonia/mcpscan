@@ -17,7 +17,7 @@ import (
 	"runtime"
 )
 
-const Version = "v2.0.0-dev"
+const Version = "v1.1.0"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "report" {

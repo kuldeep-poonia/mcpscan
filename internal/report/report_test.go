@@ -63,6 +63,12 @@ func TestReport_TableFormat(t *testing.T) {
 	if !strings.Contains(out, "Transport Modes") || !strings.Contains(out, "Credential Security") {
 		t.Errorf("expected report output to contain limitation notice, got: %s", out)
 	}
+	if !strings.Contains(out, "HTTP Confidence Levels: confirmed | likely | unverifiable_protected | none") {
+		t.Errorf("expected HTTP confidence levels in notice, got: %s", out)
+	}
+	if !strings.Contains(out, "Stdio Confidence Levels: confirmed (active process) | likely (configured, dormant)") {
+		t.Errorf("expected Stdio confidence levels in notice, got: %s", out)
+	}
 
 	// Assert HTTP table column headers
 	if !strings.Contains(out, "DISCOVERED HTTP MCP SERVERS:") || !strings.Contains(out, "TARGET IP:PORT") {

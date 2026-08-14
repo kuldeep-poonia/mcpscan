@@ -19,7 +19,8 @@ const LimitationNotice = `
 - Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.
 - Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).
 - Credential Security: Zero environment secrets are stored or logged; CLI arguments are masked.
-- Confidence Model: Discovered servers are labeled with explicit confidence levels (confirmed | likely | unverifiable).
+- HTTP Confidence Levels: confirmed | likely | unverifiable_protected | none
+- Stdio Confidence Levels: confirmed (active process) | likely (configured, dormant)
 `
 
 // JSONReportPayload represents the structured output for `--format json`.
@@ -179,7 +180,8 @@ func (r *Reporter) renderJSON(w io.Writer, record *types.ScanRecord, httpServers
 			"Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.",
 			"Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).",
 			"Credential Security: Zero environment secrets are stored or logged; CLI arguments are masked.",
-			"Confidence Model: Discovered servers are labeled with explicit confidence levels (confirmed | likely | unverifiable).",
+			"HTTP Confidence Levels: confirmed | likely | unverifiable_protected | none",
+			"Stdio Confidence Levels: confirmed (active process) | likely (configured, dormant)",
 		},
 		ScanMetadata:      record,
 		Summary:           c,
