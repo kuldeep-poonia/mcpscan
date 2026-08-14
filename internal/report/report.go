@@ -15,6 +15,9 @@ import (
 const LimitationNotice = `
 [NOTICE - KNOWN SCAN LIMITATIONS]
 - Transport Modes: MCPScan audits HTTP network transports and local AI tool stdio configs.
+- Registry Scope: Stdio inspection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); no filesystem-wide search.
+- Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.
+- Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).
 - Credential Security: Zero environment secrets are stored or logged; CLI arguments are masked.
 - Confidence Model: Discovered servers are labeled with explicit confidence levels (confirmed | likely | unverifiable).
 `
@@ -172,6 +175,9 @@ func (r *Reporter) renderJSON(w io.Writer, record *types.ScanRecord, httpServers
 	payload := JSONReportPayload{
 		Limitations: []string{
 			"Transport Modes: MCPScan audits HTTP network transports and local AI tool stdio configs.",
+			"Registry Scope: Stdio inspection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); no filesystem-wide search.",
+			"Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.",
+			"Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).",
 			"Credential Security: Zero environment secrets are stored or logged; CLI arguments are masked.",
 			"Confidence Model: Discovered servers are labeled with explicit confidence levels (confirmed | likely | unverifiable).",
 		},
