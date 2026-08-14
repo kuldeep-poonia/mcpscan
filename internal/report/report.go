@@ -56,7 +56,7 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, servers []
 		return err
 	}
 
-	c := types.CalculateSummaryCounts(servers)
+	c := types.CalculateSummaryCounts(servers, nil)
 
 	totalDiscovered := len(servers)
 	if totalDiscovered > 0 {

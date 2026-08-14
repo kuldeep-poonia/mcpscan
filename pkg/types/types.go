@@ -130,11 +130,11 @@ type SummaryCounts struct {
 	StdioTotal     int
 }
 
-// CalculateSummaryCounts evaluates slices of DiscoveredServer and StdioDiscoveredServer records and returns aggregated SummaryCounts.
-func CalculateSummaryCounts(servers []DiscoveredServer) SummaryCounts {
+// CalculateSummaryCounts evaluates slices of DiscoveredServer (HTTP) and StdioDiscoveredServer (Stdio) records and returns a unified SummaryCounts struct.
+func CalculateSummaryCounts(httpServers []DiscoveredServer, stdioServers []StdioDiscoveredServer) SummaryCounts {
 	var c SummaryCounts
 
-	for _, s := range servers {
+	for _, s := range httpServers {
 		switch s.MCPConfidence {
 		case ConfidenceConfirmed:
 			c.Confirmed++
@@ -175,21 +175,18 @@ func CalculateSummaryCounts(servers []DiscoveredServer) SummaryCounts {
 		}
 	}
 
+	for _, s := range stdioServers {
+		c.StdioTotal++
+		switch s.MCPConfidence {
+		case ConfidenceConfirmed:
+			c.StdioConfirmed++
+		case ConfidenceLikely:
+			c.StdioLikely++
+		}
+	}
+
 	return c
 }
 
-// CalculateStdioCounts aggregates counts for stdio-transport discovered servers.
-func CalculateStdioCounts(stdioServers []StdioDiscoveredServer) (confirmed int, likely int, total int) {
-	for _, s := range stdioServers {
-		total++
-		switch s.MCPConfidence {
-		case ConfidenceConfirmed:
-			confirmed++
-		case ConfidenceLikely:
-			likely++
-		}
-	}
-	return confirmed, likely, total
-}
 
 

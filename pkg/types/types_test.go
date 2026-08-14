@@ -50,7 +50,25 @@ func TestCalculateSummaryCounts_MultiCategoryBatch(t *testing.T) {
 		},
 	}
 
-	c := CalculateSummaryCounts(servers)
+	stdioServers := []StdioDiscoveredServer{
+		{
+			SourceTool:    "Claude Desktop",
+			ServerName:    "filesystem",
+			MCPConfidence: ConfidenceConfirmed,
+		},
+		{
+			SourceTool:    "Cursor",
+			ServerName:    "github",
+			MCPConfidence: ConfidenceLikely,
+		},
+		{
+			SourceTool:    "Antigravity",
+			ServerName:    "postgres",
+			MCPConfidence: ConfidenceConfirmed,
+		},
+	}
+
+	c := CalculateSummaryCounts(servers, stdioServers)
 
 	if c.Confirmed != 2 {
 		t.Errorf("expected 2 Confirmed, got %d", c.Confirmed)
@@ -92,38 +110,18 @@ func TestCalculateSummaryCounts_MultiCategoryBatch(t *testing.T) {
 		t.Errorf("expected 1 LowRisk, got %d", c.LowRisk)
 	}
 
-	t.Logf("CalculateSummaryCounts multi-category test: PASS (%+v)", c)
-}
-
-// TestCalculateStdioCounts tests aggregation of stdio transport findings.
-func TestCalculateStdioCounts(t *testing.T) {
-	stdioServers := []StdioDiscoveredServer{
-		{
-			SourceTool:    "Claude Desktop",
-			ServerName:    "filesystem",
-			MCPConfidence: ConfidenceConfirmed,
-		},
-		{
-			SourceTool:    "Cursor",
-			ServerName:    "github",
-			MCPConfidence: ConfidenceLikely,
-		},
-		{
-			SourceTool:    "Antigravity",
-			ServerName:    "postgres",
-			MCPConfidence: ConfidenceConfirmed,
-		},
+	// Assert unified Stdio metrics
+	if c.StdioConfirmed != 2 {
+		t.Errorf("expected 2 StdioConfirmed, got %d", c.StdioConfirmed)
+	}
+	if c.StdioLikely != 1 {
+		t.Errorf("expected 1 StdioLikely, got %d", c.StdioLikely)
+	}
+	if c.StdioTotal != 3 {
+		t.Errorf("expected 3 StdioTotal, got %d", c.StdioTotal)
 	}
 
-	confirmed, likely, total := CalculateStdioCounts(stdioServers)
-	if confirmed != 2 {
-		t.Errorf("expected 2 confirmed, got %d", confirmed)
-	}
-	if likely != 1 {
-		t.Errorf("expected 1 likely, got %d", likely)
-	}
-	if total != 3 {
-		t.Errorf("expected 3 total, got %d", total)
-	}
+	t.Logf("CalculateSummaryCounts multi-category unified test: PASS (%+v)", c)
 }
+
 

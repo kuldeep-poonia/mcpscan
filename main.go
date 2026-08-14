@@ -109,7 +109,7 @@ func main() {
 	det := detector.NewDetector(cfg.Timeout)
 	discovered, _ := det.DetectBatch(ctx, openPorts)
 
-	detCounts := types.CalculateSummaryCounts(discovered)
+	detCounts := types.CalculateSummaryCounts(discovered, nil)
 	fmt.Printf("[+] MCP Detector: Identified %d confirmed, %d likely, %d unverifiable (protected), and %d non-MCP server(s)\n",
 		detCounts.Confirmed, detCounts.Likely, detCounts.Unverifiable, detCounts.None)
 
@@ -117,7 +117,7 @@ func main() {
 	chk := auth.NewChecker(cfg.Timeout)
 	auditedServers, _ := chk.CheckAuthBatch(ctx, discovered)
 
-	authCounts := types.CalculateSummaryCounts(auditedServers)
+	authCounts := types.CalculateSummaryCounts(auditedServers, nil)
 	if authCounts.Evaluated > 0 {
 		protectedStr := formatProtectedSummary(authCounts.Protected, authCounts.ProtectedLowRisk, authCounts.ProtectedMediumRisk)
 		fmt.Printf("[+] Auth Audit: Evaluated %d server(s): %d unprotected (HIGH risk), %s, %d unknown (MEDIUM risk)\n",
