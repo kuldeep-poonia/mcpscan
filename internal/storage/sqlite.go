@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -298,6 +299,11 @@ func (s *Storage) GetStdioDiscoveredServers(ctx context.Context, scanID int64) (
 		if pidNull.Valid {
 			srv.MatchedPID = int(pidNull.Int64)
 		}
+		if t, err := time.Parse(time.RFC3339Nano, detTimeStr); err == nil {
+			srv.DetectedAt = t
+		} else if t, err := time.Parse(time.RFC3339, detTimeStr); err == nil {
+			srv.DetectedAt = t
+		}
 		servers = append(servers, srv)
 	}
 
@@ -329,6 +335,18 @@ func (s *Storage) GetLastScan(ctx context.Context) (*types.ScanRecord, []types.D
 		return nil, nil, fmt.Errorf("querying last scan: %w", err)
 	}
 
+	if t, err := time.Parse(time.RFC3339Nano, startedStr); err == nil {
+		record.StartedAt = t
+	} else if t, err := time.Parse(time.RFC3339, startedStr); err == nil {
+		record.StartedAt = t
+	}
+
+	if t, err := time.Parse(time.RFC3339Nano, endedStr); err == nil {
+		record.EndedAt = t
+	} else if t, err := time.Parse(time.RFC3339, endedStr); err == nil {
+		record.EndedAt = t
+	}
+
 	return s.getServersForScan(ctx, db, &record)
 }
 
@@ -354,10 +372,16 @@ func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *typ
 			return nil, nil, fmt.Errorf("scanning server row: %w", err)
 		}
 
+		srv.Transport = types.TransportHTTP
 		srv.MCPConfidence = types.MCPConfidence(mcpConf)
 		srv.AuthStatus = types.AuthStatus(authStat)
 		srv.AuthConfidence = types.AuthConfidence(authConf)
 		srv.RiskLevel = types.RiskLevel(riskLvl)
+		if t, err := time.Parse(time.RFC3339Nano, detTimeStr); err == nil {
+			srv.DetectedAt = t
+		} else if t, err := time.Parse(time.RFC3339, detTimeStr); err == nil {
+			srv.DetectedAt = t
+		}
 		servers = append(servers, srv)
 	}
 

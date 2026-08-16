@@ -91,6 +91,7 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 	srv := types.DiscoveredServer{
 		IP:              target.IP,
 		Port:            target.Port,
+		Transport:       types.TransportHTTP,
 		MCPConfidence:   types.ConfidenceNone,
 		ProtocolVersion: "",
 		AuthStatus:      types.AuthUnknown,

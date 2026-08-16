@@ -82,6 +82,81 @@ func TestStorage_WriteAndReadIntegrity(t *testing.T) {
 		if actual.IP != expected.IP || actual.Port != expected.Port || actual.MCPConfidence != expected.MCPConfidence || actual.AuthStatus != expected.AuthStatus || actual.RiskLevel != expected.RiskLevel {
 			t.Errorf("server %d mismatch: got %+v, expected %+v", i, actual, expected)
 		}
+		if actual.Transport != types.TransportHTTP {
+			t.Errorf("expected server %d transport to be 'http', got %q", i, actual.Transport)
+		}
+		if actual.DetectedAt.IsZero() {
+			t.Errorf("expected server %d detected_at to be non-zero", i)
+		}
+	}
+}
+
+// TestStorage_ReportSubcommandReadback specifically asserts that reading back a scan
+// for the report command populates StartedAt, EndedAt, TargetRange, and Transport correctly.
+func TestStorage_ReportSubcommandReadback(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "report_readback.db")
+
+	store := NewStorage(dbPath)
+	ctx := context.Background()
+
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("failed to initialize schema: %v", err)
+	}
+
+	startTime := time.Now().Add(-10 * time.Second).UTC().Truncate(time.Second)
+	endTime := time.Now().UTC().Truncate(time.Second)
+
+	record := &types.ScanRecord{
+		StartedAt:         startTime,
+		EndedAt:           endTime,
+		TargetRange:       "127.0.0.1",
+		TotalHostsScanned: 1,
+		ToolVersion:       "v1.1.0",
+	}
+
+	servers := []types.DiscoveredServer{
+		{
+			IP:              "127.0.0.1",
+			Port:            8000,
+			Transport:       types.TransportHTTP,
+			MCPConfidence:   types.ConfidenceConfirmed,
+			ProtocolVersion: "2024-11-05",
+			AuthStatus:      types.AuthUnprotected,
+			AuthConfidence:  types.AuthConfidenceHigh,
+			RiskLevel:       types.RiskHigh,
+			DetectedAt:      startTime,
+		},
+	}
+
+	if err := store.SaveScan(ctx, record, servers); err != nil {
+		t.Fatalf("failed to save scan: %v", err)
+	}
+
+	// Read back via GetLastScan
+	retrievedRecord, retrievedServers, err := store.GetLastScan(ctx)
+	if err != nil {
+		t.Fatalf("failed to get last scan: %v", err)
+	}
+
+	if retrievedRecord.StartedAt.IsZero() || retrievedRecord.StartedAt.Year() == 1 {
+		t.Errorf("REGRESSION: retrieved StartedAt is zero-value: %v", retrievedRecord.StartedAt)
+	}
+	if retrievedRecord.EndedAt.IsZero() || retrievedRecord.EndedAt.Year() == 1 {
+		t.Errorf("REGRESSION: retrieved EndedAt is zero-value: %v", retrievedRecord.EndedAt)
+	}
+	if retrievedRecord.TargetRange != "127.0.0.1" {
+		t.Errorf("REGRESSION: retrieved TargetRange is empty/mismatched: %q", retrievedRecord.TargetRange)
+	}
+
+	if len(retrievedServers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(retrievedServers))
+	}
+	if retrievedServers[0].Transport != types.TransportHTTP {
+		t.Errorf("REGRESSION: retrieved server transport is not 'http': %q", retrievedServers[0].Transport)
+	}
+	if retrievedServers[0].DetectedAt.IsZero() || retrievedServers[0].DetectedAt.Year() == 1 {
+		t.Errorf("REGRESSION: retrieved server DetectedAt is zero-value: %v", retrievedServers[0].DetectedAt)
 	}
 }
 

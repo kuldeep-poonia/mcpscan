@@ -149,10 +149,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	targetRange := cfg.Target
+	if targetRange == "" {
+		if cfg.LocalOnly || len(targets) == 1 {
+			targetRange = "127.0.0.1"
+		} else {
+			targetRange = fmt.Sprintf("%d hosts", len(targets))
+		}
+	}
+
 	record := &types.ScanRecord{
 		StartedAt:         startScan,
 		EndedAt:           time.Now(),
-		TargetRange:       cfg.Target,
+		TargetRange:       targetRange,
 		TotalHostsScanned: len(targets),
 		ToolVersion:       Version,
 	}
