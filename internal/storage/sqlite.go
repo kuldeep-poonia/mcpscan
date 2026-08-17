@@ -41,6 +41,10 @@ func (s *Storage) openDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("enabling foreign keys: %w", err)
 	}
 
+	// Ensure schema backward-compatibility columns exist for legacy databases
+	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'http';")
+	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN transport_security TEXT NOT NULL DEFAULT 'not evaluated';")
+
 	return db, nil
 }
 
