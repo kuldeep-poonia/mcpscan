@@ -1,4 +1,4 @@
-// Package detector implements the 3-layer verification strategy to identify genuine HTTP MCP servers.
+// Package detector implements the 3-layer verification strategy to identify genuine HTTP MCP servers and parameter safety heuristics.
 package detector
 
 import (
@@ -18,6 +18,229 @@ import (
 
 // Maximum response body size (1MB) to defend against memory exhaustion bombs.
 const maxResponseBodySize = 1024 * 1024
+
+// HighRiskExactTerms contains exact parameter names that represent direct system access.
+var HighRiskExactTerms = map[string]bool{
+	"command":       true,
+	"cmd":           true,
+	"path":          true,
+	"filepath":      true,
+	"file_path":     true,
+	"dirpath":       true,
+	"dir_path":      true,
+	"query":         true,
+	"sql":           true,
+	"sql_query":     true,
+	"raw_query":     true,
+	"script":        true,
+	"code":          true,
+	"exec":          true,
+	"eval":          true,
+	"shell":         true,
+	"shell_command": true,
+	"bash_command":  true,
+	"exec_command":  true,
+	"stdin":         true,
+}
+
+// SafeParameterDenyList contains parameter names that contain high-risk tokens but represent benign non-system values.
+var SafeParameterDenyList = map[string]bool{
+	"zip_code":      true,
+	"zipcode":       true,
+	"postal_code":   true,
+	"postalcode":    true,
+	"area_code":     true,
+	"areacode":      true,
+	"country_code":  true,
+	"countrycode":   true,
+	"currency_code": true,
+	"currencycode":  true,
+	"language_code": true,
+	"languagecode":  true,
+	"status_code":   true,
+	"statuscode":    true,
+	"error_code":    true,
+	"errorcode":     true,
+	"response_code": true,
+	"responsecode":  true,
+	"http_code":     true,
+	"dial_code":     true,
+	"dialcode":      true,
+	"color_code":    true,
+	"colorcode":     true,
+	"barcode":       true,
+	"bar_code":      true,
+	"qrcode":        true,
+	"qr_code":       true,
+	"promo_code":    true,
+	"promocode":     true,
+	"discount_code": true,
+	"coupon_code":   true,
+	"passcode":      true,
+	"access_code":   true,
+	"pin_code":      true,
+}
+
+// isDangerousParameterName checks if paramName represents a high-risk system parameter using exact and tokenized matching.
+func isDangerousParameterName(name string) bool {
+	norm := strings.ToLower(strings.TrimSpace(name))
+	if norm == "" {
+		return false
+	}
+
+	// 1. Check safe deny-list
+	if SafeParameterDenyList[norm] {
+		return false
+	}
+
+	// 2. Check exact match
+	if HighRiskExactTerms[norm] {
+		return true
+	}
+
+	// 3. Tokenize delimiters (_, -, .)
+	var tokens []string
+	var current strings.Builder
+	for _, r := range norm {
+		if r == '_' || r == '-' || r == '.' || r == ' ' {
+			if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteRune(r)
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+
+	for i, t := range tokens {
+		if HighRiskExactTerms[t] {
+			if t == "code" && i > 0 {
+				prev := tokens[i-1]
+				if prev == "zip" || prev == "postal" || prev == "area" || prev == "country" || prev == "currency" ||
+					prev == "language" || prev == "status" || prev == "error" || prev == "response" || prev == "http" ||
+					prev == "color" || prev == "bar" || prev == "qr" || prev == "promo" || prev == "discount" || prev == "coupon" {
+					continue
+				}
+			}
+			return true
+		}
+	}
+
+	return false
+}
+
+// isUnconstrainedString checks if a JSON Schema property accepts unconstrained string/any values.
+func isUnconstrainedString(prop map[string]interface{}) (bool, string) {
+	if prop == nil {
+		return true, "any"
+	}
+
+	// 1. If enum is present and non-empty -> constrained -> safe
+	if enumRaw, hasEnum := prop["enum"]; hasEnum && enumRaw != nil {
+		if enumList, ok := enumRaw.([]interface{}); ok && len(enumList) > 0 {
+			return false, ""
+		}
+	}
+
+	// 2. Inspect type field
+	typeRaw, hasType := prop["type"]
+	if !hasType || typeRaw == nil {
+		// Missing type -> unconstrained any type accepted
+		return true, "any"
+	}
+
+	switch v := typeRaw.(type) {
+	case string:
+		typ := strings.ToLower(strings.TrimSpace(v))
+		if typ == "string" {
+			return true, "string"
+		}
+		return false, ""
+	case []interface{}:
+		var typesFound []string
+		hasString := false
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				s = strings.ToLower(strings.TrimSpace(s))
+				typesFound = append(typesFound, s)
+				if s == "string" {
+					hasString = true
+				}
+			}
+		}
+		if hasString {
+			return true, strings.Join(typesFound, "|")
+		}
+		return false, ""
+	default:
+		return false, ""
+	}
+}
+
+// MCPToolsListResult represents the JSON result payload of a `tools/list` response.
+type MCPToolsListResult struct {
+	Tools []struct {
+		Name        string                 `json:"name"`
+		Description string                 `json:"description"`
+		InputSchema map[string]interface{} `json:"inputSchema"`
+	} `json:"tools"`
+}
+
+// extractDangerousParameters parses tools/list response to identify unconstrained dangerous parameter shapes.
+func extractDangerousParameters(respBody []byte) []types.DangerousParameter {
+	var rpcResp JSONRPCResponse
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil || len(rpcResp.Result) == 0 {
+		return nil
+	}
+
+	var listResult MCPToolsListResult
+	if err := json.Unmarshal(rpcResp.Result, &listResult); err != nil || len(listResult.Tools) == 0 {
+		return nil
+	}
+
+	var dangerous []types.DangerousParameter
+	for _, tool := range listResult.Tools {
+		toolName := tool.Name
+		if toolName == "" {
+			toolName = "unnamed_tool"
+		}
+
+		if tool.InputSchema == nil {
+			continue
+		}
+
+		propsRaw, ok := tool.InputSchema["properties"]
+		if !ok || propsRaw == nil {
+			continue
+		}
+
+		propsMap, ok := propsRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		for paramName, propRaw := range propsMap {
+			if !isDangerousParameterName(paramName) {
+				continue
+			}
+
+			propMap, _ := propRaw.(map[string]interface{})
+			isDangerous, paramType := isUnconstrainedString(propMap)
+			if isDangerous {
+				dangerous = append(dangerous, types.DangerousParameter{
+					ToolName:  toolName,
+					ParamName: paramName,
+					ParamType: paramType,
+				})
+			}
+		}
+	}
+
+	return dangerous
+}
 
 // JSONRPCRequest represents a standard JSON-RPC 2.0 request payload.
 type JSONRPCRequest struct {
@@ -212,6 +435,9 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 			if err := json.Unmarshal(toolsRespBody, &toolsRPCResp); err == nil {
 				if toolsRPCResp.JSONRPC == "2.0" && (toolsRPCResp.Result != nil || toolsRPCResp.Error != nil) {
 					srv.MCPConfidence = types.ConfidenceConfirmed
+					if len(toolsRPCResp.Result) > 0 {
+						srv.DangerousParams = extractDangerousParameters(toolsRespBody)
+					}
 				}
 			}
 		}

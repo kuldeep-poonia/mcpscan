@@ -16,6 +16,7 @@ const LimitationNotice = `
 [NOTICE - KNOWN SCAN LIMITATIONS]
 - Transport Modes: MCPScan audits HTTP network transports and local AI tool stdio configs.
 - Transport Security: Evaluates wire encryption (plaintext HTTP vs HTTPS/TLS presence without certificate chain validation). Plaintext exposure on loopback (127.0.0.1) has lower risk than over routable subnets.
+- Parameter Danger Heuristic: Checks parameter names and unconstrained types in tools/list for system-level access terms (command, path, sql, etc.) without semantic LLM analysis.
 - Registry Scope: Stdio inspection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); no filesystem-wide search.
 - Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.
 - Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).
@@ -68,8 +69,8 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 	if len(httpServers) > 0 {
 		fmt.Fprintln(w, "DISCOVERED HTTP MCP SERVERS:")
 		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(tw, "TARGET IP:PORT\tTRANSPORT SECURITY\tMCP CONFIDENCE\tPROTOCOL VERSION\tAUTH STATUS\tRISK LEVEL")
-		fmt.Fprintln(tw, "--------------\t------------------\t--------------\t----------------\t-----------\t----------")
+		fmt.Fprintln(tw, "TARGET IP:PORT\tTRANSPORT SECURITY\tMCP CONFIDENCE\tPROTOCOL VERSION\tAUTH STATUS\tRISK LEVEL\tDANGEROUS PARAMS")
+		fmt.Fprintln(tw, "--------------\t------------------\t--------------\t----------------\t-----------\t----------\t----------------")
 
 		for _, srv := range httpServers {
 			targetAddr := fmt.Sprintf("%s:%d", srv.IP, srv.Port)
@@ -77,13 +78,32 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 			if transSec == "" {
 				transSec = string(types.TransportSecurityNotEvaluated)
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+
+			dangerStr := "N/A (unreachable)"
+			if srv.MCPConfidence == types.ConfidenceConfirmed {
+				if len(srv.DangerousParams) > 0 {
+					var paramSummaries []string
+					for _, dp := range srv.DangerousParams {
+						paramSummaries = append(paramSummaries, fmt.Sprintf("%s.%s", dp.ToolName, dp.ParamName))
+					}
+					joined := strings.Join(paramSummaries, ", ")
+					if len(joined) > 30 {
+						joined = joined[:27] + "..."
+					}
+					dangerStr = fmt.Sprintf("%d flagged (%s)", len(srv.DangerousParams), joined)
+				} else {
+					dangerStr = "0 flagged (safe)"
+				}
+			}
+
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				targetAddr,
 				transSec,
 				srv.MCPConfidence,
 				srv.ProtocolVersion,
 				srv.AuthStatus,
 				srv.RiskLevel,
+				dangerStr,
 			)
 		}
 		_ = tw.Flush()
@@ -183,6 +203,7 @@ func (r *Reporter) renderJSON(w io.Writer, record *types.ScanRecord, httpServers
 		Limitations: []string{
 			"Transport Modes: MCPScan audits HTTP network transports and local AI tool stdio configs.",
 			"Transport Security: Evaluates wire encryption (plaintext HTTP vs HTTPS/TLS presence without certificate chain validation). Plaintext exposure on loopback (127.0.0.1) has lower risk than over routable subnets.",
+			"Parameter Danger Heuristic: Checks parameter names and unconstrained types in tools/list for system-level access terms (command, path, sql, etc.) without semantic LLM analysis.",
 			"Registry Scope: Stdio inspection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); no filesystem-wide search.",
 			"Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.",
 			"Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).",

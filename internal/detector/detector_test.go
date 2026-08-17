@@ -381,6 +381,116 @@ func TestDetector_TransportSecurityPlaintext(t *testing.T) {
 	}
 }
 
+// TestParameterShapeDangerDetection verifies exact/tokenized parameter matching, array types, missing types, and false-positive prevention.
+func TestParameterShapeDangerDetection(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		buf := make([]byte, 2048)
+		n, _ := r.Body.Read(buf)
+		bodyStr := string(buf[:n])
+
+		if strings.Contains(bodyStr, "tools/list") {
+			_, _ = w.Write([]byte(`{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"result": {
+					"tools": [
+						{
+							"name": "run_task",
+							"description": "Executes a generic background task",
+							"inputSchema": {
+								"type": "object",
+								"properties": {
+									"command": { "type": "string" },
+									"zip_code": { "type": "string" },
+									"format": { "type": "string", "enum": ["json", "text"] },
+									"timeout_sec": { "type": "integer" }
+								}
+							}
+						},
+						{
+							"name": "file_reader",
+							"description": "Reads file contents",
+							"inputSchema": {
+								"type": "object",
+								"properties": {
+									"filepath": { "type": ["string", "null"] },
+									"status_code": { "type": "string" }
+								}
+							}
+						},
+						{
+							"name": "db_client",
+							"description": "Executes query",
+							"inputSchema": {
+								"type": "object",
+								"properties": {
+									"sql_query": {}
+								}
+							}
+						}
+					]
+				}
+			}`))
+			return
+		}
+
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}`))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	d := NewDetector(1 * time.Second)
+	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if srv.MCPConfidence != types.ConfidenceConfirmed {
+		t.Fatalf("expected ConfidenceConfirmed, got %v", srv.MCPConfidence)
+	}
+
+	if len(srv.DangerousParams) != 3 {
+		t.Fatalf("expected exactly 3 dangerous params, got %d: %+v", len(srv.DangerousParams), srv.DangerousParams)
+	}
+
+	flaggedMap := make(map[string]types.DangerousParameter)
+	for _, dp := range srv.DangerousParams {
+		flaggedMap[dp.ToolName+"."+dp.ParamName] = dp
+	}
+
+	// 1. run_task.command -> flagged as string
+	if dp, ok := flaggedMap["run_task.command"]; !ok || dp.ParamType != "string" {
+		t.Errorf("expected run_task.command flagged with type string, got: %+v", dp)
+	}
+
+	// 2. file_reader.filepath -> flagged as string|null
+	if dp, ok := flaggedMap["file_reader.filepath"]; !ok || dp.ParamType != "string|null" {
+		t.Errorf("expected file_reader.filepath flagged with type string|null, got: %+v", dp)
+	}
+
+	// 3. db_client.sql_query -> flagged as any (missing type)
+	if dp, ok := flaggedMap["db_client.sql_query"]; !ok || dp.ParamType != "any" {
+		t.Errorf("expected db_client.sql_query flagged with type any, got: %+v", dp)
+	}
+
+	// Assert safe non-system parameters were NOT flagged
+	if _, ok := flaggedMap["run_task.zip_code"]; ok {
+		t.Errorf("FALSE POSITIVE: zip_code was wrongly flagged")
+	}
+	if _, ok := flaggedMap["file_reader.status_code"]; ok {
+		t.Errorf("FALSE POSITIVE: status_code was wrongly flagged")
+	}
+	if _, ok := flaggedMap["run_task.format"]; ok {
+		t.Errorf("FALSE POSITIVE: enum-constrained format was wrongly flagged")
+	}
+	if _, ok := flaggedMap["run_task.timeout_sec"]; ok {
+		t.Errorf("FALSE POSITIVE: integer timeout_sec was wrongly flagged")
+	}
+}
+
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")
 	trimmed = strings.TrimPrefix(trimmed, "https://")

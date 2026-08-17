@@ -4,10 +4,12 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -44,6 +46,7 @@ func (s *Storage) openDB() (*sql.DB, error) {
 	// Ensure schema backward-compatibility columns exist for legacy databases
 	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'http';")
 	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN transport_security TEXT NOT NULL DEFAULT 'not evaluated';")
+	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN dangerous_params TEXT NOT NULL DEFAULT '[]';")
 
 	return db, nil
 }
@@ -73,6 +76,7 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 		port INTEGER NOT NULL,
 		transport TEXT NOT NULL DEFAULT 'http',
 		transport_security TEXT NOT NULL DEFAULT 'not evaluated',
+		dangerous_params TEXT NOT NULL DEFAULT '[]',
 		mcp_confidence TEXT NOT NULL,
 		protocol_version TEXT NOT NULL,
 		auth_status TEXT NOT NULL,
@@ -106,6 +110,7 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 	// Gracefully apply column additions for pre-existing databases
 	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'http';")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN transport_security TEXT NOT NULL DEFAULT 'not evaluated';")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN dangerous_params TEXT NOT NULL DEFAULT '[]';")
 
 	// Apply file permission hardening
 	s.restrictFilePermissions()
@@ -151,8 +156,8 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 
 	// 2. Insert discovered servers
 	serverQuery := `
-	INSERT INTO discovered_servers (scan_id, ip, port, transport, transport_security, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	INSERT INTO discovered_servers (scan_id, ip, port, transport, transport_security, dangerous_params, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	stmt, err := tx.PrepareContext(ctx, serverQuery)
 	if err != nil {
@@ -168,12 +173,17 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 		if servers[i].TransportSecurity == "" {
 			servers[i].TransportSecurity = types.TransportSecurityNotEvaluated
 		}
+		dpJSON, _ := json.Marshal(servers[i].DangerousParams)
+		if len(servers[i].DangerousParams) == 0 {
+			dpJSON = []byte("[]")
+		}
 		_, err := stmt.ExecContext(ctx,
 			scanID,
 			servers[i].IP,
 			servers[i].Port,
 			string(servers[i].Transport),
 			string(servers[i].TransportSecurity),
+			string(dpJSON),
 			string(servers[i].MCPConfidence),
 			servers[i].ProtocolVersion,
 			string(servers[i].AuthStatus),
@@ -371,7 +381,7 @@ func (s *Storage) GetLastScan(ctx context.Context) (*types.ScanRecord, []types.D
 // getServersForScan queries discovered servers associated with a specific scan ID.
 func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *types.ScanRecord) (*types.ScanRecord, []types.DiscoveredServer, error) {
 	rows, err := db.QueryContext(ctx, `
-	SELECT id, scan_id, ip, port, transport, transport_security, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at
+	SELECT id, scan_id, ip, port, transport, transport_security, dangerous_params, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at
 	FROM discovered_servers
 	WHERE scan_id = ?
 	ORDER BY id ASC;
@@ -384,9 +394,9 @@ func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *typ
 	var servers []types.DiscoveredServer
 	for rows.Next() {
 		var srv types.DiscoveredServer
-		var transportStr, transSecStr, mcpConf, authStat, authConf, riskLvl, detTimeStr string
+		var transportStr, transSecStr, dpStr, mcpConf, authStat, authConf, riskLvl, detTimeStr string
 
-		if err := rows.Scan(&srv.ID, &srv.ScanID, &srv.IP, &srv.Port, &transportStr, &transSecStr, &mcpConf, &srv.ProtocolVersion, &authStat, &authConf, &riskLvl, &detTimeStr); err != nil {
+		if err := rows.Scan(&srv.ID, &srv.ScanID, &srv.IP, &srv.Port, &transportStr, &transSecStr, &dpStr, &mcpConf, &srv.ProtocolVersion, &authStat, &authConf, &riskLvl, &detTimeStr); err != nil {
 			return nil, nil, fmt.Errorf("scanning server row: %w", err)
 		}
 
@@ -397,6 +407,12 @@ func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *typ
 		srv.TransportSecurity = types.TransportSecurity(transSecStr)
 		if srv.TransportSecurity == "" {
 			srv.TransportSecurity = types.TransportSecurityNotEvaluated
+		}
+		if strings.TrimSpace(dpStr) != "" && dpStr != "[]" {
+			var dparams []types.DangerousParameter
+			if err := json.Unmarshal([]byte(dpStr), &dparams); err == nil {
+				srv.DangerousParams = dparams
+			}
 		}
 		srv.MCPConfidence = types.MCPConfidence(mcpConf)
 		srv.AuthStatus = types.AuthStatus(authStat)

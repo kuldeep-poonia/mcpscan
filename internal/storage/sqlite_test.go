@@ -41,7 +41,10 @@ func TestStorage_WriteAndReadIntegrity(t *testing.T) {
 			AuthStatus:        types.AuthUnprotected,
 			AuthConfidence:    types.AuthConfidenceHigh,
 			RiskLevel:         types.RiskHigh,
-			DetectedAt:        time.Now().Truncate(time.Millisecond),
+			DangerousParams: []types.DangerousParameter{
+				{ToolName: "run_task", ParamName: "command", ParamType: "string"},
+			},
+			DetectedAt: time.Now().Truncate(time.Millisecond),
 		},
 		{
 			IP:                "192.168.1.20",
@@ -89,6 +92,9 @@ func TestStorage_WriteAndReadIntegrity(t *testing.T) {
 		}
 		if actual.TransportSecurity != expected.TransportSecurity {
 			t.Errorf("expected server %d transport_security to be %q, got %q", i, expected.TransportSecurity, actual.TransportSecurity)
+		}
+		if len(actual.DangerousParams) != len(expected.DangerousParams) {
+			t.Errorf("server %d dangerous_params length mismatch: got %d, expected %d", i, len(actual.DangerousParams), len(expected.DangerousParams))
 		}
 		if actual.DetectedAt.IsZero() {
 			t.Errorf("expected server %d detected_at to be non-zero", i)
