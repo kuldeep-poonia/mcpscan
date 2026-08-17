@@ -491,6 +491,72 @@ func TestParameterShapeDangerDetection(t *testing.T) {
 	}
 }
 
+// TestComputeToolDefinitionHash_CanonicalOrderInvariance asserts that tool definitions produce the exact same SHA-256 hash regardless of tool array order in the JSON response.
+func TestComputeToolDefinitionHash_CanonicalOrderInvariance(t *testing.T) {
+	respA := []byte(`{
+		"jsonrpc": "2.0",
+		"id": 2,
+		"result": {
+			"tools": [
+				{ "name": "alpha", "description": "First tool", "inputSchema": { "type": "object", "properties": { "cmd": { "type": "string" } } } },
+				{ "name": "beta", "description": "Second tool", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" } } } }
+			]
+		}
+	}`)
+
+	respB := []byte(`{
+		"jsonrpc": "2.0",
+		"id": 2,
+		"result": {
+			"tools": [
+				{ "name": "beta", "description": "Second tool", "inputSchema": { "type": "object", "properties": { "path": { "type": "string" } } } },
+				{ "name": "alpha", "description": "First tool", "inputSchema": { "type": "object", "properties": { "cmd": { "type": "string" } } } }
+			]
+		}
+	}`)
+
+	hashA := computeToolDefinitionHash(respA)
+	hashB := computeToolDefinitionHash(respB)
+
+	if hashA == "" || hashB == "" {
+		t.Fatalf("expected non-empty hashes, got hashA=%q, hashB=%q", hashA, hashB)
+	}
+
+	if hashA != hashB {
+		t.Errorf("expected deterministic hash equality regardless of tool order: hashA=%s, hashB=%s", hashA, hashB)
+	}
+}
+
+// TestComputeToolDefinitionHash_Mutation asserts that modifying a tool's description or schema alters the SHA-256 digest.
+func TestComputeToolDefinitionHash_Mutation(t *testing.T) {
+	original := []byte(`{
+		"jsonrpc": "2.0",
+		"id": 2,
+		"result": {
+			"tools": [
+				{ "name": "run_task", "description": "Original description", "inputSchema": { "type": "object" } }
+			]
+		}
+	}`)
+
+	mutated := []byte(`{
+		"jsonrpc": "2.0",
+		"id": 2,
+		"result": {
+			"tools": [
+				{ "name": "run_task", "description": "Mutated injected description", "inputSchema": { "type": "object" } }
+			]
+		}
+	}`)
+
+	hashOrig := computeToolDefinitionHash(original)
+	hashMut := computeToolDefinitionHash(mutated)
+
+	if hashOrig == hashMut {
+		t.Errorf("expected different hashes for mutated tool definition, but both were %q", hashOrig)
+	}
+}
+
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")
 	trimmed = strings.TrimPrefix(trimmed, "https://")

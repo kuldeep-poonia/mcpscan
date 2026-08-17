@@ -24,6 +24,7 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to discove
 - **3-Layer HTTP Verification:** Evaluates services through JSON-RPC 2.0 structure, MCP `protocolVersion`/`capabilities` validation, and secondary method verification.
 - **Transport Security Check:** Identifies whether HTTP endpoints operate over `plaintext HTTP` or encrypted `HTTPS` (TLS presence), surfacing wire-interception risk independently of auth status.
 - **Parameter-Shape Danger Detection:** Passively inspects tool parameter schemas (`inputSchema`) during Layer 3 verification to flag unconstrained string parameters matching high-risk system terms (`command`, `path`, `sql`, `script`), closing the evasion gap of innocuously-named tools without external LLMs.
+- **Tool-Definition Integrity Check (Rug-Pull Detection):** Computes deterministic SHA-256 digests over canonicalized tool definitions and tracks changes across scans. Distinguishes tool mutations (`modified`) from endpoint port-reuse (`replaced`) using handshake identity correlation.
 - **Single-Request Auth Audit:** Sends **exactly 1 unauthenticated request** per detected HTTP server to audit authentication enforcement without brute-forcing or state alteration.
 
 ### Local AI Tool Discovery (Stdio Transport — Opt-in)
@@ -33,6 +34,7 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to discove
   - **Layer 1:** JSON syntax validity (guarded with a 5MB read limit).
   - **Layer 2:** Schema structural validation (`mcpServers` object with `command`; `serverUrl` entries are excluded to prevent double-counting).
   - **Layer 3:** Non-elevated OS process cross-referencing (matches running processes via Windows CIM, Linux `/proc`, or macOS `ps` to upgrade from `likely` to `confirmed`).
+- **Stdio Configuration Integrity:** Computes canonical SHA-256 hashes of execution parameters (`command`, `args`, `has_env_block`) to track config changes across scans (`new`, `unchanged`, `modified`).
 - **Two-Layer Credential Masking:** Sensitive CLI flags, HTTP headers (`Header: Value`), and high-entropy secret tokens embedded in commands/args are partially masked (`sk-...789`), while structured filesystem paths are preserved.
 - **Zero `env` Storage:** Records only `has_env_block: true` when environment variables are present — secret keys and values inside `env` blocks are never read, stored, or displayed.
 
@@ -143,6 +145,13 @@ mcpscan report --db audit.db --format json
 - **`protected` / `LOW` Risk:** Server returned HTTP 401 Unauthorized or 403 Forbidden to unauthenticated requests.
 - **`unknown` / `MEDIUM` Risk:** Server returned an ambiguous response or timed out during probing.
 
+### Tool & Config Integrity Levels
+- **`new`:** First observation of the server endpoint or stdio tool configuration.
+- **`unchanged`:** Canonical SHA-256 hash matches the previous scan record.
+- **`modified`:** Tool definitions (HTTP) or execution parameters (stdio) altered since last observation.
+- **`replaced` (HTTP only):** A different server was detected on the same IP:port endpoint (port reuse disambiguation via `serverInfo.name`). Stdio configs match by exact `source_tool:server_name:config_file` keys where port reuse does not apply.
+- **`not evaluated`:** Tool definitions were unreachable during scan (`unverifiable_protected` or non-MCP).
+
 ---
 
 ## Known Limitations & Scope Disclosure
@@ -150,7 +159,8 @@ mcpscan report --db audit.db --format json
 - **Transport Scope:** Stdio detection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); it does not perform blind filesystem-wide searches.
 - **Transport Security:** HTTPS detection verifies the presence of TLS wire encryption only; it does not validate certificate authority chains or trust status (allowing audit of internal/self-signed private services). Plaintext exposure on loopback (`127.0.0.1`) represents a lower exposure profile than plaintext on routable subnets.
 - **Detection Latency:** For an individual unresponsive server (hanging without dropping the connection), worst-case detection time can take up to 2x the configured `--timeout` due to sequential HTTP-then-HTTPS probing.
-- **Parameter Danger Scope:** Checks parameter names and unconstrained string types against a maintained system-access dictionary (`command`, `path`, `sql`, etc.); it performs syntactic and type analysis without semantic LLM prompt interpretation.
+- **Parameter Danger Scope:** Checks parameter names and unconstrained string types against a maintained system-access dictionary (`command`, `path`, `sql`, etc.) alongside a false-positive deny-list (`zip_code`, `status_code`, etc.). Non-standard compound identifiers not yet included on the deny-list may trigger false positives; this operates as a local syntactic and type heuristic without semantic LLM analysis.
+- **Integrity Check Baseline:** Cross-scan comparison relies on historical records persisted in the target SQLite database file. Scanning with a newly created database file establishes a fresh baseline (`new`).
 - **Path Verification:** Some platform configuration paths (Cursor across OSs, and macOS/Linux variants) are inferred from convention and pending community verification. *If a config path differs for your environment, please open a GitHub issue with your tool and OS path details.*
 - **Process Matching:** Process cross-referencing uses non-elevated OS inspection and is best-effort/heuristic.
 - **Zero Credential Exposure:** Secret keys in CLI arguments are masked, and environment variables are never stored or logged.

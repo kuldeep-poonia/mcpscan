@@ -4,11 +4,14 @@ package detector
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -242,6 +245,39 @@ func extractDangerousParameters(respBody []byte) []types.DangerousParameter {
 	return dangerous
 }
 
+// computeToolDefinitionHash calculates a deterministic SHA-256 digest over normalized tool definitions.
+func computeToolDefinitionHash(respBody []byte) string {
+	var rpcResp JSONRPCResponse
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil || len(rpcResp.Result) == 0 {
+		return ""
+	}
+
+	var listResult MCPToolsListResult
+	if err := json.Unmarshal(rpcResp.Result, &listResult); err != nil || len(listResult.Tools) == 0 {
+		return ""
+	}
+
+	// Sort tools by Name ascending to eliminate arbitrary server-side ordering differences
+	tools := make([]struct {
+		Name        string                 `json:"name"`
+		Description string                 `json:"description"`
+		InputSchema map[string]interface{} `json:"inputSchema"`
+	}, len(listResult.Tools))
+	copy(tools, listResult.Tools)
+
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Name < tools[j].Name
+	})
+
+	canonicalBytes, err := json.Marshal(tools)
+	if err != nil {
+		return ""
+	}
+
+	hash := sha256.Sum256(canonicalBytes)
+	return hex.EncodeToString(hash[:])
+}
+
 // JSONRPCRequest represents a standard JSON-RPC 2.0 request payload.
 type JSONRPCRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
@@ -418,6 +454,7 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 		srv.MCPConfidence = types.ConfidenceLikely
 		srv.TransportSecurity = s.security
 		srv.ProtocolVersion = initResult.ProtocolVersion
+		srv.ServerName = initResult.ServerInfo.Name
 		if srv.ProtocolVersion == "" {
 			srv.ProtocolVersion = "2024-11-05"
 		}
@@ -437,6 +474,7 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 					srv.MCPConfidence = types.ConfidenceConfirmed
 					if len(toolsRPCResp.Result) > 0 {
 						srv.DangerousParams = extractDangerousParameters(toolsRespBody)
+						srv.ToolDefinitionHash = computeToolDefinitionHash(toolsRespBody)
 					}
 				}
 			}

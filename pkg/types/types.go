@@ -88,37 +88,55 @@ type DangerousParameter struct {
 	ParamType string `json:"param_type"`
 }
 
+// IntegrityStatus represents the cross-scan integrity status of a server's tool definitions or config.
+type IntegrityStatus string
+
+const (
+	IntegrityNew          IntegrityStatus = "new"
+	IntegrityUnchanged    IntegrityStatus = "unchanged"
+	IntegrityModified     IntegrityStatus = "modified"
+	IntegrityReplaced     IntegrityStatus = "replaced"
+	IntegrityNotEvaluated IntegrityStatus = "not evaluated"
+)
+
 // DiscoveredServer represents an identified HTTP service on an IP and port.
 type DiscoveredServer struct {
-	ID                int64                `json:"id"`
-	ScanID            int64                `json:"scan_id"`
-	IP                string               `json:"ip"`
-	Port              int                  `json:"port"`
-	Transport         TransportType        `json:"transport"`
-	TransportSecurity TransportSecurity    `json:"transport_security"`
-	MCPConfidence     MCPConfidence        `json:"mcp_confidence"`
-	ProtocolVersion   string               `json:"protocol_version"`
-	AuthStatus        AuthStatus           `json:"auth_status"`
-	AuthConfidence    AuthConfidence       `json:"auth_confidence"`
-	RiskLevel         RiskLevel            `json:"risk_level"`
-	DangerousParams   []DangerousParameter `json:"dangerous_params,omitempty"`
-	DetectedAt        time.Time            `json:"detected_at"`
+	ID                 int64                `json:"id"`
+	ScanID             int64                `json:"scan_id"`
+	IP                 string               `json:"ip"`
+	Port               int                  `json:"port"`
+	ServerName         string               `json:"server_name,omitempty"`
+	Transport          TransportType        `json:"transport"`
+	TransportSecurity  TransportSecurity    `json:"transport_security"`
+	MCPConfidence      MCPConfidence        `json:"mcp_confidence"`
+	ProtocolVersion    string               `json:"protocol_version"`
+	AuthStatus         AuthStatus           `json:"auth_status"`
+	AuthConfidence     AuthConfidence       `json:"auth_confidence"`
+	RiskLevel          RiskLevel            `json:"risk_level"`
+	DangerousParams    []DangerousParameter `json:"dangerous_params,omitempty"`
+	ToolDefinitionHash string               `json:"tool_definition_hash,omitempty"`
+	IntegrityStatus    IntegrityStatus      `json:"integrity_status,omitempty"`
+	PreviousObservedAt *time.Time           `json:"previous_observed_at,omitempty"`
+	DetectedAt         time.Time            `json:"detected_at"`
 }
 
 // StdioDiscoveredServer represents an MCP server configured over stdio transport in a local AI tool config file.
 type StdioDiscoveredServer struct {
-	ID                int64         `json:"id"`
-	ScanID            int64         `json:"scan_id"`
-	SourceTool        string        `json:"source_tool"`
-	ConfigFile        string        `json:"config_file"`
-	ServerName        string        `json:"server_name"`
-	Command           string        `json:"command"`
-	ArgsSummary       string        `json:"args_summary"`
-	HasEnvBlock       bool          `json:"has_env_block"`
-	MCPConfidence     MCPConfidence `json:"mcp_confidence"`
-	ProcessMatchFound bool          `json:"process_match_found"`
-	MatchedPID        int           `json:"matched_pid,omitempty"`
-	DetectedAt        time.Time     `json:"detected_at"`
+	ID                 int64           `json:"id"`
+	ScanID             int64           `json:"scan_id"`
+	SourceTool         string          `json:"source_tool"`
+	ConfigFile         string          `json:"config_file"`
+	ServerName         string          `json:"server_name"`
+	Command            string          `json:"command"`
+	ArgsSummary        string          `json:"args_summary"`
+	HasEnvBlock        bool            `json:"has_env_block"`
+	MCPConfidence      MCPConfidence   `json:"mcp_confidence"`
+	ProcessMatchFound  bool            `json:"process_match_found"`
+	MatchedPID         int             `json:"matched_pid,omitempty"`
+	ConfigHash         string          `json:"config_hash,omitempty"`
+	IntegrityStatus    IntegrityStatus `json:"integrity_status,omitempty"`
+	PreviousObservedAt *time.Time      `json:"previous_observed_at,omitempty"`
+	DetectedAt         time.Time       `json:"detected_at"`
 }
 
 // OpenPort represents a host IP and port that responded to TCP connect scan.

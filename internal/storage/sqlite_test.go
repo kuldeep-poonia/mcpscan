@@ -317,3 +317,95 @@ func TestStorage_StdioWriteAndCascadeDelete(t *testing.T) {
 		t.Fatalf("CASCADE VIOLATION: expected 0 cascaded stdio servers, found %d", len(cascaded))
 	}
 }
+
+// TestStorage_CrossScanIntegrityCheck verifies state transitions across sequential scans (new -> unchanged -> modified -> replaced).
+func TestStorage_CrossScanIntegrityCheck(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "integrity_test.db")
+
+	store := NewStorage(dbPath)
+	ctx := context.Background()
+
+	if err := store.InitSchema(ctx); err != nil {
+		t.Fatalf("failed to init schema: %v", err)
+	}
+
+	// Scan 1: First observation of HTTP server S1 on 127.0.0.1:8000 (hash A) and Stdio server C1 (hash X)
+	rec1 := &types.ScanRecord{StartedAt: time.Now().Add(-3 * time.Minute), EndedAt: time.Now().Add(-3 * time.Minute), TargetRange: "127.0.0.1", TotalHostsScanned: 1, ToolVersion: "v1.0.0"}
+	http1 := []types.DiscoveredServer{
+		{IP: "127.0.0.1", Port: 8000, ServerName: "service-alpha", ToolDefinitionHash: "hash-aaaa", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveScan(ctx, rec1, http1); err != nil {
+		t.Fatalf("save scan 1 failed: %v", err)
+	}
+	stdio1 := []types.StdioDiscoveredServer{
+		{SourceTool: "Claude Desktop", ConfigFile: "/config.json", ServerName: "mcp-tool", ConfigHash: "hash-xxxx", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveStdioDiscoveredServers(ctx, rec1.ID, stdio1); err != nil {
+		t.Fatalf("save stdio 1 failed: %v", err)
+	}
+
+	if http1[0].IntegrityStatus != types.IntegrityNew {
+		t.Errorf("scan 1: expected HTTP integrity 'new', got %q", http1[0].IntegrityStatus)
+	}
+	if stdio1[0].IntegrityStatus != types.IntegrityNew {
+		t.Errorf("scan 1: expected Stdio integrity 'new', got %q", stdio1[0].IntegrityStatus)
+	}
+
+	// Scan 2: Re-scan identical servers (hash A and hash X) -> unchanged
+	rec2 := &types.ScanRecord{StartedAt: time.Now().Add(-2 * time.Minute), EndedAt: time.Now().Add(-2 * time.Minute), TargetRange: "127.0.0.1", TotalHostsScanned: 1, ToolVersion: "v1.0.0"}
+	http2 := []types.DiscoveredServer{
+		{IP: "127.0.0.1", Port: 8000, ServerName: "service-alpha", ToolDefinitionHash: "hash-aaaa", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveScan(ctx, rec2, http2); err != nil {
+		t.Fatalf("save scan 2 failed: %v", err)
+	}
+	stdio2 := []types.StdioDiscoveredServer{
+		{SourceTool: "Claude Desktop", ConfigFile: "/config.json", ServerName: "mcp-tool", ConfigHash: "hash-xxxx", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveStdioDiscoveredServers(ctx, rec2.ID, stdio2); err != nil {
+		t.Fatalf("save stdio 2 failed: %v", err)
+	}
+
+	if http2[0].IntegrityStatus != types.IntegrityUnchanged {
+		t.Errorf("scan 2: expected HTTP integrity 'unchanged', got %q", http2[0].IntegrityStatus)
+	}
+	if stdio2[0].IntegrityStatus != types.IntegrityUnchanged {
+		t.Errorf("scan 2: expected Stdio integrity 'unchanged', got %q", stdio2[0].IntegrityStatus)
+	}
+
+	// Scan 3: Server definitions altered (hash B and hash Y) -> modified
+	rec3 := &types.ScanRecord{StartedAt: time.Now().Add(-1 * time.Minute), EndedAt: time.Now().Add(-1 * time.Minute), TargetRange: "127.0.0.1", TotalHostsScanned: 1, ToolVersion: "v1.0.0"}
+	http3 := []types.DiscoveredServer{
+		{IP: "127.0.0.1", Port: 8000, ServerName: "service-alpha", ToolDefinitionHash: "hash-bbbb", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveScan(ctx, rec3, http3); err != nil {
+		t.Fatalf("save scan 3 failed: %v", err)
+	}
+	stdio3 := []types.StdioDiscoveredServer{
+		{SourceTool: "Claude Desktop", ConfigFile: "/config.json", ServerName: "mcp-tool", ConfigHash: "hash-yyyy", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveStdioDiscoveredServers(ctx, rec3.ID, stdio3); err != nil {
+		t.Fatalf("save stdio 3 failed: %v", err)
+	}
+
+	if http3[0].IntegrityStatus != types.IntegrityModified {
+		t.Errorf("scan 3: expected HTTP integrity 'modified', got %q", http3[0].IntegrityStatus)
+	}
+	if stdio3[0].IntegrityStatus != types.IntegrityModified {
+		t.Errorf("scan 3: expected Stdio integrity 'modified', got %q", stdio3[0].IntegrityStatus)
+	}
+
+	// Scan 4: Port reuse on 127.0.0.1:8000 with a DIFFERENT server (service-beta) -> replaced
+	rec4 := &types.ScanRecord{StartedAt: time.Now(), EndedAt: time.Now(), TargetRange: "127.0.0.1", TotalHostsScanned: 1, ToolVersion: "v1.0.0"}
+	http4 := []types.DiscoveredServer{
+		{IP: "127.0.0.1", Port: 8000, ServerName: "service-beta", ToolDefinitionHash: "hash-cccc", MCPConfidence: types.ConfidenceConfirmed, DetectedAt: time.Now()},
+	}
+	if err := store.SaveScan(ctx, rec4, http4); err != nil {
+		t.Fatalf("save scan 4 failed: %v", err)
+	}
+
+	if http4[0].IntegrityStatus != types.IntegrityReplaced {
+		t.Errorf("scan 4: expected HTTP integrity 'replaced' on port reuse, got %q", http4[0].IntegrityStatus)
+	}
+}

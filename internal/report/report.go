@@ -17,6 +17,7 @@ const LimitationNotice = `
 - Transport Modes: MCPScan audits HTTP network transports and local AI tool stdio configs.
 - Transport Security: Evaluates wire encryption (plaintext HTTP vs HTTPS/TLS presence without certificate chain validation). Plaintext exposure on loopback (127.0.0.1) has lower risk than over routable subnets.
 - Parameter Danger Heuristic: Checks parameter names and unconstrained types in tools/list for system-level access terms (command, path, sql, etc.) without semantic LLM analysis.
+- Tool & Config Integrity: Compares canonical hashes of tool definitions and stdio configs across scans. For HTTP, port reuse by a different server (changed serverInfo.name) is flagged as 'replaced' rather than 'modified'. Stdio configs match by exact source_tool:server_name:config_file (new/unchanged/modified).
 - Registry Scope: Stdio inspection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); no filesystem-wide search.
 - Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.
 - Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).
@@ -69,14 +70,24 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 	if len(httpServers) > 0 {
 		fmt.Fprintln(w, "DISCOVERED HTTP MCP SERVERS:")
 		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(tw, "TARGET IP:PORT\tTRANSPORT SECURITY\tMCP CONFIDENCE\tPROTOCOL VERSION\tAUTH STATUS\tRISK LEVEL\tDANGEROUS PARAMS")
-		fmt.Fprintln(tw, "--------------\t------------------\t--------------\t----------------\t-----------\t----------\t----------------")
+		fmt.Fprintln(tw, "TARGET IP:PORT\tTRANSPORT SECURITY\tMCP CONFIDENCE\tPROTOCOL VERSION\tAUTH STATUS\tRISK LEVEL\tINTEGRITY\tDANGEROUS PARAMS")
+		fmt.Fprintln(tw, "--------------\t------------------\t--------------\t----------------\t-----------\t----------\t---------\t----------------")
 
 		for _, srv := range httpServers {
 			targetAddr := fmt.Sprintf("%s:%d", srv.IP, srv.Port)
 			transSec := string(srv.TransportSecurity)
 			if transSec == "" {
 				transSec = string(types.TransportSecurityNotEvaluated)
+			}
+
+			integrityStr := string(srv.IntegrityStatus)
+			if integrityStr == "" {
+				integrityStr = string(types.IntegrityNotEvaluated)
+			}
+			if srv.IntegrityStatus == types.IntegrityModified {
+				integrityStr = "MODIFIED"
+			} else if srv.IntegrityStatus == types.IntegrityReplaced {
+				integrityStr = "replaced"
 			}
 
 			dangerStr := "N/A (unreachable)"
@@ -96,13 +107,14 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 				}
 			}
 
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				targetAddr,
 				transSec,
 				srv.MCPConfidence,
 				srv.ProtocolVersion,
 				srv.AuthStatus,
 				srv.RiskLevel,
+				integrityStr,
 				dangerStr,
 			)
 		}
@@ -114,8 +126,8 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 	if len(stdioServers) > 0 {
 		fmt.Fprintln(w, "STDIO-TRANSPORT MCP SERVERS (LOCAL CONFIGS):")
 		tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(tw, "AI TOOL\tSERVER NAME\tCOMMAND\tARGS SUMMARY\tCONFIDENCE\tPROCESS MATCH\tHAS ENV")
-		fmt.Fprintln(tw, "-------\t-----------\t-------\t------------\t----------\t-------------\t-------")
+		fmt.Fprintln(tw, "AI TOOL\tSERVER NAME\tCOMMAND\tARGS SUMMARY\tCONFIDENCE\tPROCESS MATCH\tHAS ENV\tINTEGRITY")
+		fmt.Fprintln(tw, "-------\t-----------\t-------\t------------\t----------\t-------------\t-------\t---------")
 
 		for _, srv := range stdioServers {
 			procMatchStr := "No"
@@ -140,7 +152,15 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 				argsDisplay = "-"
 			}
 
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			integrityStr := string(srv.IntegrityStatus)
+			if integrityStr == "" {
+				integrityStr = string(types.IntegrityNotEvaluated)
+			}
+			if srv.IntegrityStatus == types.IntegrityModified {
+				integrityStr = "MODIFIED"
+			}
+
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				srv.SourceTool,
 				srv.ServerName,
 				srv.Command,
@@ -148,6 +168,7 @@ func (r *Reporter) renderTable(w io.Writer, record *types.ScanRecord, httpServer
 				srv.MCPConfidence,
 				procMatchStr,
 				hasEnvStr,
+				integrityStr,
 			)
 		}
 		_ = tw.Flush()
@@ -204,6 +225,7 @@ func (r *Reporter) renderJSON(w io.Writer, record *types.ScanRecord, httpServers
 			"Transport Modes: MCPScan audits HTTP network transports and local AI tool stdio configs.",
 			"Transport Security: Evaluates wire encryption (plaintext HTTP vs HTTPS/TLS presence without certificate chain validation). Plaintext exposure on loopback (127.0.0.1) has lower risk than over routable subnets.",
 			"Parameter Danger Heuristic: Checks parameter names and unconstrained types in tools/list for system-level access terms (command, path, sql, etc.) without semantic LLM analysis.",
+			"Tool & Config Integrity: Compares canonical hashes of tool definitions and stdio configs across scans. For HTTP, port reuse by a different server (changed serverInfo.name) is flagged as 'replaced' rather than 'modified'. Stdio configs match by exact source_tool:server_name:config_file (new/unchanged/modified).",
 			"Registry Scope: Stdio inspection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); no filesystem-wide search.",
 			"Verification Status: Some platform config paths (Cursor, macOS/Linux variants) are inferred from convention and pending community confirmation.",
 			"Process Matching: OS process cross-referencing is heuristic/best-effort (non-elevated read-only inspection).",

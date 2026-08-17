@@ -2,7 +2,11 @@ package stdioscanner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"mcpscan/pkg/types"
@@ -54,6 +58,13 @@ func (d *StdioDetector) DetectLocal(ctx context.Context, targetOS string, envGet
 	return allDiscovered, nil
 }
 
+// computeStdioConfigHash calculates a deterministic SHA-256 digest over normalized stdio configuration fields.
+func computeStdioConfigHash(command, argsSummary string, hasEnv bool) string {
+	payload := fmt.Sprintf("cmd:%s|args:%s|env:%t", strings.TrimSpace(command), strings.TrimSpace(argsSummary), hasEnv)
+	hash := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(hash[:])
+}
+
 // DetectFromData processes raw configuration bytes through detection Layer 1, Layer 2, and Layer 3.
 func (d *StdioDetector) DetectFromData(toolName, path string, data []byte, rootKey string) []types.StdioDiscoveredServer {
 	// Layer 1 & 2: Parse and validate schema structure
@@ -80,6 +91,7 @@ func (d *StdioDetector) DetectFromData(toolName, path string, data []byte, rootK
 			ArgsSummary:   def.ArgsSummary,
 			HasEnvBlock:   def.HasEnvBlock,
 			MCPConfidence: types.ConfidenceLikely,
+			ConfigHash:    computeStdioConfigHash(def.Command, def.ArgsSummary, def.HasEnvBlock),
 			DetectedAt:    now,
 		}
 

@@ -30,7 +30,7 @@ func NewStorage(dbPath string) *Storage {
 	return &Storage{dbPath: dbPath}
 }
 
-// openDB opens an SQLite connection and explicitly enables foreign key constraints.
+// // openDB opens an SQLite connection and explicitly enables foreign key constraints.
 func (s *Storage) openDB() (*sql.DB, error) {
 	db, err := sql.Open("sqlite", s.dbPath)
 	if err != nil {
@@ -47,6 +47,9 @@ func (s *Storage) openDB() (*sql.DB, error) {
 	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'http';")
 	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN transport_security TEXT NOT NULL DEFAULT 'not evaluated';")
 	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN dangerous_params TEXT NOT NULL DEFAULT '[]';")
+	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN server_name TEXT NOT NULL DEFAULT '';")
+	_, _ = db.Exec("ALTER TABLE discovered_servers ADD COLUMN tool_definition_hash TEXT NOT NULL DEFAULT '';")
+	_, _ = db.Exec("ALTER TABLE stdio_discovered_servers ADD COLUMN config_hash TEXT NOT NULL DEFAULT '';")
 
 	return db, nil
 }
@@ -74,9 +77,11 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 		scan_id INTEGER NOT NULL,
 		ip TEXT NOT NULL,
 		port INTEGER NOT NULL,
+		server_name TEXT NOT NULL DEFAULT '',
 		transport TEXT NOT NULL DEFAULT 'http',
 		transport_security TEXT NOT NULL DEFAULT 'not evaluated',
 		dangerous_params TEXT NOT NULL DEFAULT '[]',
+		tool_definition_hash TEXT NOT NULL DEFAULT '',
 		mcp_confidence TEXT NOT NULL,
 		protocol_version TEXT NOT NULL,
 		auth_status TEXT NOT NULL,
@@ -95,6 +100,7 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 		command TEXT NOT NULL,
 		args_summary TEXT,
 		has_env_block INTEGER NOT NULL,
+		config_hash TEXT NOT NULL DEFAULT '',
 		mcp_confidence TEXT NOT NULL,
 		process_match_found INTEGER NOT NULL,
 		matched_pid INTEGER,
@@ -111,11 +117,101 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'http';")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN transport_security TEXT NOT NULL DEFAULT 'not evaluated';")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN dangerous_params TEXT NOT NULL DEFAULT '[]';")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN server_name TEXT NOT NULL DEFAULT '';")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN tool_definition_hash TEXT NOT NULL DEFAULT '';")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE stdio_discovered_servers ADD COLUMN config_hash TEXT NOT NULL DEFAULT '';")
 
 	// Apply file permission hardening
 	s.restrictFilePermissions()
 
 	return nil
+}
+
+type queryable interface {
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+func resolveHTTPIntegrity(ctx context.Context, q queryable, currentScanID int64, srv *types.DiscoveredServer) {
+	if srv.ToolDefinitionHash == "" {
+		srv.IntegrityStatus = types.IntegrityNotEvaluated
+		return
+	}
+
+	var prevServerName, prevHash, prevStartedAt string
+	query := `
+	SELECT s.server_name, s.tool_definition_hash, sc.started_at
+	FROM discovered_servers s
+	JOIN scans sc ON s.scan_id = sc.id
+	WHERE s.ip = ? AND s.port = ? AND s.tool_definition_hash != '' AND s.scan_id < ?
+	ORDER BY s.id DESC
+	LIMIT 1;
+	`
+	row := q.QueryRowContext(ctx, query, srv.IP, srv.Port, currentScanID)
+	err := row.Scan(&prevServerName, &prevHash, &prevStartedAt)
+	if err == sql.ErrNoRows {
+		srv.IntegrityStatus = types.IntegrityNew
+		return
+	}
+	if err != nil {
+		srv.IntegrityStatus = types.IntegrityNew
+		return
+	}
+
+	if t, err := time.Parse(time.RFC3339Nano, prevStartedAt); err == nil {
+		srv.PreviousObservedAt = &t
+	} else if t, err := time.Parse(time.RFC3339, prevStartedAt); err == nil {
+		srv.PreviousObservedAt = &t
+	}
+
+	if prevServerName != "" && srv.ServerName != "" && prevServerName != srv.ServerName {
+		srv.IntegrityStatus = types.IntegrityReplaced
+		return
+	}
+
+	if prevHash == srv.ToolDefinitionHash {
+		srv.IntegrityStatus = types.IntegrityUnchanged
+	} else {
+		srv.IntegrityStatus = types.IntegrityModified
+	}
+}
+
+func resolveStdioIntegrity(ctx context.Context, q queryable, currentScanID int64, srv *types.StdioDiscoveredServer) {
+	if srv.ConfigHash == "" {
+		srv.IntegrityStatus = types.IntegrityNotEvaluated
+		return
+	}
+
+	var prevHash, prevStartedAt string
+	query := `
+	SELECT s.config_hash, sc.started_at
+	FROM stdio_discovered_servers s
+	JOIN scans sc ON s.scan_id = sc.id
+	WHERE s.source_tool = ? AND s.server_name = ? AND s.config_file = ? AND s.config_hash != '' AND s.scan_id < ?
+	ORDER BY s.id DESC
+	LIMIT 1;
+	`
+	row := q.QueryRowContext(ctx, query, srv.SourceTool, srv.ServerName, srv.ConfigFile, currentScanID)
+	err := row.Scan(&prevHash, &prevStartedAt)
+	if err == sql.ErrNoRows {
+		srv.IntegrityStatus = types.IntegrityNew
+		return
+	}
+	if err != nil {
+		srv.IntegrityStatus = types.IntegrityNew
+		return
+	}
+
+	if t, err := time.Parse(time.RFC3339Nano, prevStartedAt); err == nil {
+		srv.PreviousObservedAt = &t
+	} else if t, err := time.Parse(time.RFC3339, prevStartedAt); err == nil {
+		srv.PreviousObservedAt = &t
+	}
+
+	if prevHash == srv.ConfigHash {
+		srv.IntegrityStatus = types.IntegrityUnchanged
+	} else {
+		srv.IntegrityStatus = types.IntegrityModified
+	}
 }
 
 // SaveScan persists a scan run record and its discovered servers in an atomic transaction.
@@ -156,8 +252,8 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 
 	// 2. Insert discovered servers
 	serverQuery := `
-	INSERT INTO discovered_servers (scan_id, ip, port, transport, transport_security, dangerous_params, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	INSERT INTO discovered_servers (scan_id, ip, port, server_name, transport, transport_security, dangerous_params, tool_definition_hash, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	stmt, err := tx.PrepareContext(ctx, serverQuery)
 	if err != nil {
@@ -173,6 +269,8 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 		if servers[i].TransportSecurity == "" {
 			servers[i].TransportSecurity = types.TransportSecurityNotEvaluated
 		}
+		resolveHTTPIntegrity(ctx, tx, scanID, &servers[i])
+
 		dpJSON, _ := json.Marshal(servers[i].DangerousParams)
 		if len(servers[i].DangerousParams) == 0 {
 			dpJSON = []byte("[]")
@@ -181,9 +279,11 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 			scanID,
 			servers[i].IP,
 			servers[i].Port,
+			servers[i].ServerName,
 			string(servers[i].Transport),
 			string(servers[i].TransportSecurity),
 			string(dpJSON),
+			servers[i].ToolDefinitionHash,
 			string(servers[i].MCPConfidence),
 			servers[i].ProtocolVersion,
 			string(servers[i].AuthStatus),
@@ -225,8 +325,8 @@ func (s *Storage) SaveStdioDiscoveredServers(ctx context.Context, scanID int64, 
 	defer func() { _ = tx.Rollback() }()
 
 	query := `
-	INSERT INTO stdio_discovered_servers (scan_id, source_tool, config_file, server_name, command, args_summary, has_env_block, mcp_confidence, process_match_found, matched_pid, detected_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+	INSERT INTO stdio_discovered_servers (scan_id, source_tool, config_file, server_name, command, args_summary, has_env_block, config_hash, mcp_confidence, process_match_found, matched_pid, detected_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
@@ -236,6 +336,8 @@ func (s *Storage) SaveStdioDiscoveredServers(ctx context.Context, scanID int64, 
 
 	for i := range servers {
 		servers[i].ScanID = scanID
+		resolveStdioIntegrity(ctx, tx, scanID, &servers[i])
+
 		hasEnvInt := 0
 		if servers[i].HasEnvBlock {
 			hasEnvInt = 1
@@ -260,6 +362,7 @@ func (s *Storage) SaveStdioDiscoveredServers(ctx context.Context, scanID int64, 
 			servers[i].Command,
 			servers[i].ArgsSummary,
 			hasEnvInt,
+			servers[i].ConfigHash,
 			string(servers[i].MCPConfidence),
 			procMatchInt,
 			pidVal,
@@ -287,7 +390,7 @@ func (s *Storage) GetStdioDiscoveredServers(ctx context.Context, scanID int64) (
 	defer db.Close()
 
 	rows, err := db.QueryContext(ctx, `
-	SELECT id, scan_id, source_tool, config_file, server_name, command, args_summary, has_env_block, mcp_confidence, process_match_found, matched_pid, detected_at
+	SELECT id, scan_id, source_tool, config_file, server_name, command, args_summary, has_env_block, config_hash, mcp_confidence, process_match_found, matched_pid, detected_at
 	FROM stdio_discovered_servers
 	WHERE scan_id = ?
 	ORDER BY id ASC;
@@ -313,6 +416,7 @@ func (s *Storage) GetStdioDiscoveredServers(ctx context.Context, scanID int64) (
 			&srv.Command,
 			&srv.ArgsSummary,
 			&hasEnvInt,
+			&srv.ConfigHash,
 			&mcpConf,
 			&procMatchInt,
 			&pidNull,
@@ -332,6 +436,7 @@ func (s *Storage) GetStdioDiscoveredServers(ctx context.Context, scanID int64) (
 		} else if t, err := time.Parse(time.RFC3339, detTimeStr); err == nil {
 			srv.DetectedAt = t
 		}
+		resolveStdioIntegrity(ctx, db, scanID, &srv)
 		servers = append(servers, srv)
 	}
 
@@ -355,8 +460,7 @@ func (s *Storage) GetLastScan(ctx context.Context) (*types.ScanRecord, []types.D
 
 	var record types.ScanRecord
 	var startedStr, endedStr string
-	err = row.Scan(&record.ID, &startedStr, &endedStr, &record.TargetRange, &record.TotalHostsScanned, &record.ToolVersion)
-	if err != nil {
+	if err := row.Scan(&record.ID, &startedStr, &endedStr, &record.TargetRange, &record.TotalHostsScanned, &record.ToolVersion); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, []types.DiscoveredServer{}, nil
 		}
@@ -381,7 +485,7 @@ func (s *Storage) GetLastScan(ctx context.Context) (*types.ScanRecord, []types.D
 // getServersForScan queries discovered servers associated with a specific scan ID.
 func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *types.ScanRecord) (*types.ScanRecord, []types.DiscoveredServer, error) {
 	rows, err := db.QueryContext(ctx, `
-	SELECT id, scan_id, ip, port, transport, transport_security, dangerous_params, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at
+	SELECT id, scan_id, ip, port, server_name, transport, transport_security, dangerous_params, tool_definition_hash, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at
 	FROM discovered_servers
 	WHERE scan_id = ?
 	ORDER BY id ASC;
@@ -396,7 +500,7 @@ func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *typ
 		var srv types.DiscoveredServer
 		var transportStr, transSecStr, dpStr, mcpConf, authStat, authConf, riskLvl, detTimeStr string
 
-		if err := rows.Scan(&srv.ID, &srv.ScanID, &srv.IP, &srv.Port, &transportStr, &transSecStr, &dpStr, &mcpConf, &srv.ProtocolVersion, &authStat, &authConf, &riskLvl, &detTimeStr); err != nil {
+		if err := rows.Scan(&srv.ID, &srv.ScanID, &srv.IP, &srv.Port, &srv.ServerName, &transportStr, &transSecStr, &dpStr, &srv.ToolDefinitionHash, &mcpConf, &srv.ProtocolVersion, &authStat, &authConf, &riskLvl, &detTimeStr); err != nil {
 			return nil, nil, fmt.Errorf("scanning server row: %w", err)
 		}
 
@@ -423,6 +527,7 @@ func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *typ
 		} else if t, err := time.Parse(time.RFC3339, detTimeStr); err == nil {
 			srv.DetectedAt = t
 		}
+		resolveHTTPIntegrity(ctx, db, record.ID, &srv)
 		servers = append(servers, srv)
 	}
 
