@@ -104,3 +104,39 @@ func TestStdioDetector_NonMCPJSONTrap(t *testing.T) {
 		t.Errorf("expected 0 servers for non-MCP JSON trap, got %d", len(servers))
 	}
 }
+
+// TestComputeStdioConfigHash_MutationAndInvariance tests that stdio config hashing is deterministic and captures command/arg/env mutations.
+func TestComputeStdioConfigHash_MutationAndInvariance(t *testing.T) {
+	origCmd := "node"
+	origArgs := "server.js --port 8080"
+	origEnv := false
+
+	hashOrig := computeStdioConfigHash(origCmd, origArgs, origEnv)
+	if hashOrig == "" {
+		t.Fatalf("expected non-empty hash, got empty string")
+	}
+
+	// 1. Invariance on whitespace normalization
+	hashTrimmed := computeStdioConfigHash("  node  ", " server.js --port 8080 ", false)
+	if hashTrimmed != hashOrig {
+		t.Errorf("expected whitespace invariance: got %s vs %s", hashTrimmed, hashOrig)
+	}
+
+	// 2. Mutation on command change
+	hashMutCmd := computeStdioConfigHash("python", origArgs, origEnv)
+	if hashMutCmd == hashOrig {
+		t.Errorf("expected distinct hash on command mutation, both were %s", hashOrig)
+	}
+
+	// 3. Mutation on args change
+	hashMutArgs := computeStdioConfigHash(origCmd, "server.js --port 9090 --injected-flag", origEnv)
+	if hashMutArgs == hashOrig {
+		t.Errorf("expected distinct hash on args mutation, both were %s", hashOrig)
+	}
+
+	// 4. Mutation on env block toggle
+	hashMutEnv := computeStdioConfigHash(origCmd, origArgs, true)
+	if hashMutEnv == hashOrig {
+		t.Errorf("expected distinct hash on env change, both were %s", hashOrig)
+	}
+}
