@@ -22,6 +22,7 @@ MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to discove
 - **RFC1918 Private Range Protection:** Restricts scanning to loopback (`127.0.0.0/8`) and private RFC1918 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) by default. Public IP scanning requires the `--i-understand-the-risk` override flag.
 - **Worker-Pool Concurrency & Global Rate Limiting:** Bounded concurrency pool (`--concurrency`, default 100) and global request rate limiting (`--rate-limit`, default 500 req/sec) to protect target networks.
 - **3-Layer HTTP Verification:** Evaluates services through JSON-RPC 2.0 structure, MCP `protocolVersion`/`capabilities` validation, and secondary method verification.
+- **Transport Security Check:** Identifies whether HTTP endpoints operate over `plaintext HTTP` or encrypted `HTTPS` (TLS presence), surfacing wire-interception risk independently of auth status.
 - **Single-Request Auth Audit:** Sends **exactly 1 unauthenticated request** per detected HTTP server to audit authentication enforcement without brute-forcing or state alteration.
 
 ### Local AI Tool Discovery (Stdio Transport — Opt-in)
@@ -146,6 +147,7 @@ mcpscan report --db audit.db --format json
 ## Known Limitations & Scope Disclosure
 
 - **Transport Scope:** Stdio detection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); it does not perform blind filesystem-wide searches.
+- **Transport Security:** HTTPS detection verifies the presence of TLS wire encryption only; it does not validate certificate authority chains or trust status (allowing audit of internal/self-signed private services). Plaintext exposure on loopback (`127.0.0.1`) represents a lower exposure profile than plaintext on routable subnets.
 - **Path Verification:** Some platform configuration paths (Cursor across OSs, and macOS/Linux variants) are inferred from convention and pending community verification. *If a config path differs for your environment, please open a GitHub issue with your tool and OS path details.*
 - **Process Matching:** Process cross-referencing uses non-elevated OS inspection and is best-effort/heuristic.
 - **Zero Credential Exposure:** Secret keys in CLI arguments are masked, and environment variables are never stored or logged.

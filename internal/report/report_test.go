@@ -60,7 +60,7 @@ func TestReport_TableFormat(t *testing.T) {
 	out := buf.String()
 
 	// Assert mandatory limitation disclosure block
-	if !strings.Contains(out, "Transport Modes") || !strings.Contains(out, "Credential Security") {
+	if !strings.Contains(out, "Transport Modes") || !strings.Contains(out, "Credential Security") || !strings.Contains(out, "Transport Security") {
 		t.Errorf("expected report output to contain limitation notice, got: %s", out)
 	}
 	if !strings.Contains(out, "HTTP Confidence Levels: confirmed | likely | unverifiable_protected | none") {
@@ -71,7 +71,7 @@ func TestReport_TableFormat(t *testing.T) {
 	}
 
 	// Assert HTTP table column headers
-	if !strings.Contains(out, "DISCOVERED HTTP MCP SERVERS:") || !strings.Contains(out, "TARGET IP:PORT") {
+	if !strings.Contains(out, "DISCOVERED HTTP MCP SERVERS:") || !strings.Contains(out, "TARGET IP:PORT") || !strings.Contains(out, "TRANSPORT SECURITY") {
 		t.Errorf("expected report output to contain HTTP table headers, got: %s", out)
 	}
 

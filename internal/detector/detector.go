@@ -4,6 +4,7 @@ package detector
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -70,6 +71,9 @@ func NewDetector(timeout time.Duration) *Detector {
 				ResponseHeaderTimeout: timeout,
 				IdleConnTimeout:       timeout,
 				DisableKeepAlives:     true,
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
 			},
 		},
 	}
@@ -86,23 +90,8 @@ func (e *HandshakeAuthError) Error() string {
 	return fmt.Sprintf("handshake auth required: HTTP %d", e.StatusCode)
 }
 
-// DetectPort evaluates a single open port using the 3-layer verification strategy.
-func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types.DiscoveredServer, error) {
-	srv := types.DiscoveredServer{
-		IP:              target.IP,
-		Port:            target.Port,
-		Transport:       types.TransportHTTP,
-		MCPConfidence:   types.ConfidenceNone,
-		ProtocolVersion: "",
-		AuthStatus:      types.AuthUnknown,
-		AuthConfidence:  types.AuthConfidenceLow,
-		RiskLevel:       types.RiskLow,
-		DetectedAt:      time.Now().UTC(),
-	}
-
-	url := fmt.Sprintf("http://%s:%d/", target.IP, target.Port)
-
-	// Layer 1 & 2 Probe: Send `initialize` request
+func (d *Detector) probeScheme(ctx context.Context, scheme, ip string, port int) ([]byte, *HandshakeAuthError, error) {
+	url := fmt.Sprintf("%s://%s:%d/", scheme, ip, port)
 	initReq := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      1,
@@ -120,6 +109,39 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 	respBody, err := d.sendJSONRPC(ctx, url, initReq)
 	if err != nil {
 		if authErr, ok := err.(*HandshakeAuthError); ok {
+			return nil, authErr, nil
+		}
+		return nil, nil, err
+	}
+	return respBody, nil, nil
+}
+
+// DetectPort evaluates a single open port using the 3-layer verification strategy.
+func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types.DiscoveredServer, error) {
+	srv := types.DiscoveredServer{
+		IP:                target.IP,
+		Port:              target.Port,
+		Transport:         types.TransportHTTP,
+		TransportSecurity: types.TransportSecurityNotEvaluated,
+		MCPConfidence:     types.ConfidenceNone,
+		ProtocolVersion:   "",
+		AuthStatus:        types.AuthUnknown,
+		AuthConfidence:    types.AuthConfidenceLow,
+		RiskLevel:         types.RiskLow,
+		DetectedAt:        time.Now().UTC(),
+	}
+
+	schemes := []struct {
+		scheme   string
+		security types.TransportSecurity
+	}{
+		{"http", types.TransportSecurityPlaintext},
+		{"https", types.TransportSecurityHTTPS},
+	}
+
+	for _, s := range schemes {
+		respBody, authErr, err := d.probeScheme(ctx, s.scheme, target.IP, target.Port)
+		if authErr != nil {
 			hasWWWAuth := authErr.Header.Get("WWW-Authenticate") != ""
 			cType := strings.ToLower(authErr.Header.Get("Content-Type"))
 			isJSONType := strings.Contains(cType, "application/json")
@@ -131,65 +153,70 @@ func (d *Detector) DetectPort(ctx context.Context, target types.OpenPort) (types
 			// Positive signal: WWW-Authenticate header present OR response body is JSON-shaped
 			if (hasWWWAuth || isJSONType || isJSONBody) && !isHTMLBody {
 				srv.MCPConfidence = types.ConfidenceUnverifiableProtected
+				srv.TransportSecurity = s.security
 				return srv, nil
 			}
+			continue
 		}
-		// Target failed HTTP handshake, timed out, or returned HTML login trap -> ConfidenceNone
-		return srv, nil
-	}
 
-	// Layer 1 Verification: Valid JSON-RPC 2.0 response with valid ID
-	var rpcResp JSONRPCResponse
-	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		return srv, nil
-	}
+		if err != nil {
+			continue
+		}
 
-	if rpcResp.JSONRPC != "2.0" || rpcResp.ID == nil {
-		return srv, nil
-	}
+		// Layer 1 Verification: Valid JSON-RPC 2.0 response with valid ID
+		var rpcResp JSONRPCResponse
+		if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+			continue
+		}
 
-	// Layer 2 Verification: Check for MCP-specific required fields in result
-	if len(rpcResp.Result) == 0 {
-		return srv, nil
-	}
+		if rpcResp.JSONRPC != "2.0" || rpcResp.ID == nil {
+			continue
+		}
 
-	var initResult MCPInitializeResult
-	if err := json.Unmarshal(rpcResp.Result, &initResult); err != nil {
-		return srv, nil
-	}
+		// Layer 2 Verification: Check for MCP-specific required fields in result
+		if len(rpcResp.Result) == 0 {
+			continue
+		}
 
-	// Check presence of protocolVersion or capabilities
-	hasProto := strings.TrimSpace(initResult.ProtocolVersion) != ""
-	hasCaps := initResult.Capabilities != nil
+		var initResult MCPInitializeResult
+		if err := json.Unmarshal(rpcResp.Result, &initResult); err != nil {
+			continue
+		}
 
-	if !hasProto && !hasCaps {
-		// Failed Layer 2 -> Non-MCP JSON-RPC server (ConfidenceNone)
-		return srv, nil
-	}
+		// Check presence of protocolVersion or capabilities
+		hasProto := strings.TrimSpace(initResult.ProtocolVersion) != ""
+		hasCaps := initResult.Capabilities != nil
 
-	// Passed Layer 1 + Layer 2 -> Likely MCP Server
-	srv.MCPConfidence = types.ConfidenceLikely
-	srv.ProtocolVersion = initResult.ProtocolVersion
-	if srv.ProtocolVersion == "" {
-		srv.ProtocolVersion = "2024-11-05"
-	}
+		if !hasProto && !hasCaps {
+			continue
+		}
 
-	// Layer 3 Probe: Send secondary method (`tools/list`) to cross-confirm protocol consistency
-	toolsReq := JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      2,
-		Method:  "tools/list",
-	}
+		// Passed Layer 1 + Layer 2 -> Likely MCP Server
+		srv.MCPConfidence = types.ConfidenceLikely
+		srv.TransportSecurity = s.security
+		srv.ProtocolVersion = initResult.ProtocolVersion
+		if srv.ProtocolVersion == "" {
+			srv.ProtocolVersion = "2024-11-05"
+		}
 
-	toolsBody, err := d.sendJSONRPC(ctx, url, toolsReq)
-	if err == nil {
-		var toolsResp JSONRPCResponse
-		if json.Unmarshal(toolsBody, &toolsResp) == nil {
-			if toolsResp.JSONRPC == "2.0" && (len(toolsResp.Result) > 0 || toolsResp.Error != nil) {
-				// Layer 3 passed -> Confirmed MCP Server
-				srv.MCPConfidence = types.ConfidenceConfirmed
+		// Layer 3 Probe: Send secondary method (`tools/list`) to cross-confirm protocol consistency
+		toolsReq := JSONRPCRequest{
+			JSONRPC: "2.0",
+			ID:      2,
+			Method:  "tools/list",
+		}
+		toolsURL := fmt.Sprintf("%s://%s:%d/", s.scheme, target.IP, target.Port)
+		toolsRespBody, toolsErr := d.sendJSONRPC(ctx, toolsURL, toolsReq)
+		if toolsErr == nil {
+			var toolsRPCResp JSONRPCResponse
+			if err := json.Unmarshal(toolsRespBody, &toolsRPCResp); err == nil {
+				if toolsRPCResp.JSONRPC == "2.0" && (toolsRPCResp.Result != nil || toolsRPCResp.Error != nil) {
+					srv.MCPConfidence = types.ConfidenceConfirmed
+				}
 			}
 		}
+
+		return srv, nil
 	}
 
 	return srv, nil

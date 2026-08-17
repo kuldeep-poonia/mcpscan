@@ -33,24 +33,26 @@ func TestStorage_WriteAndReadIntegrity(t *testing.T) {
 
 	servers := []types.DiscoveredServer{
 		{
-			IP:              "192.168.1.10",
-			Port:            8080,
-			MCPConfidence:   types.ConfidenceConfirmed,
-			ProtocolVersion: "2024-11-05",
-			AuthStatus:      types.AuthUnprotected,
-			AuthConfidence:  types.AuthConfidenceHigh,
-			RiskLevel:       types.RiskHigh,
-			DetectedAt:      time.Now().Truncate(time.Millisecond),
+			IP:                "192.168.1.10",
+			Port:              8080,
+			TransportSecurity: types.TransportSecurityPlaintext,
+			MCPConfidence:     types.ConfidenceConfirmed,
+			ProtocolVersion:   "2024-11-05",
+			AuthStatus:        types.AuthUnprotected,
+			AuthConfidence:    types.AuthConfidenceHigh,
+			RiskLevel:         types.RiskHigh,
+			DetectedAt:        time.Now().Truncate(time.Millisecond),
 		},
 		{
-			IP:              "192.168.1.20",
-			Port:            3000,
-			MCPConfidence:   types.ConfidenceLikely,
-			ProtocolVersion: "2024-10-07",
-			AuthStatus:      types.AuthProtected,
-			AuthConfidence:  types.AuthConfidenceHigh,
-			RiskLevel:       types.RiskLow,
-			DetectedAt:      time.Now().Truncate(time.Millisecond),
+			IP:                "192.168.1.20",
+			Port:              3000,
+			TransportSecurity: types.TransportSecurityHTTPS,
+			MCPConfidence:     types.ConfidenceLikely,
+			ProtocolVersion:   "2024-10-07",
+			AuthStatus:        types.AuthProtected,
+			AuthConfidence:    types.AuthConfidenceHigh,
+			RiskLevel:         types.RiskLow,
+			DetectedAt:        time.Now().Truncate(time.Millisecond),
 		},
 	}
 
@@ -85,6 +87,9 @@ func TestStorage_WriteAndReadIntegrity(t *testing.T) {
 		if actual.Transport != types.TransportHTTP {
 			t.Errorf("expected server %d transport to be 'http', got %q", i, actual.Transport)
 		}
+		if actual.TransportSecurity != expected.TransportSecurity {
+			t.Errorf("expected server %d transport_security to be %q, got %q", i, expected.TransportSecurity, actual.TransportSecurity)
+		}
 		if actual.DetectedAt.IsZero() {
 			t.Errorf("expected server %d detected_at to be non-zero", i)
 		}
@@ -117,15 +122,16 @@ func TestStorage_ReportSubcommandReadback(t *testing.T) {
 
 	servers := []types.DiscoveredServer{
 		{
-			IP:              "127.0.0.1",
-			Port:            8000,
-			Transport:       types.TransportHTTP,
-			MCPConfidence:   types.ConfidenceConfirmed,
-			ProtocolVersion: "2024-11-05",
-			AuthStatus:      types.AuthUnprotected,
-			AuthConfidence:  types.AuthConfidenceHigh,
-			RiskLevel:       types.RiskHigh,
-			DetectedAt:      startTime,
+			IP:                "127.0.0.1",
+			Port:              8000,
+			Transport:         types.TransportHTTP,
+			TransportSecurity: types.TransportSecurityPlaintext,
+			MCPConfidence:     types.ConfidenceConfirmed,
+			ProtocolVersion:   "2024-11-05",
+			AuthStatus:        types.AuthUnprotected,
+			AuthConfidence:    types.AuthConfidenceHigh,
+			RiskLevel:         types.RiskHigh,
+			DetectedAt:        startTime,
 		},
 	}
 
@@ -139,21 +145,23 @@ func TestStorage_ReportSubcommandReadback(t *testing.T) {
 		t.Fatalf("failed to get last scan: %v", err)
 	}
 
-	if retrievedRecord.StartedAt.IsZero() || retrievedRecord.StartedAt.Year() == 1 {
-		t.Errorf("REGRESSION: retrieved StartedAt is zero-value: %v", retrievedRecord.StartedAt)
+	if retrievedRecord.StartedAt.IsZero() {
+		t.Errorf("expected non-zero StartedAt, got %v", retrievedRecord.StartedAt)
 	}
-	if retrievedRecord.EndedAt.IsZero() || retrievedRecord.EndedAt.Year() == 1 {
-		t.Errorf("REGRESSION: retrieved EndedAt is zero-value: %v", retrievedRecord.EndedAt)
+	if retrievedRecord.EndedAt.IsZero() {
+		t.Errorf("expected non-zero EndedAt, got %v", retrievedRecord.EndedAt)
 	}
 	if retrievedRecord.TargetRange != "127.0.0.1" {
-		t.Errorf("REGRESSION: retrieved TargetRange is empty/mismatched: %q", retrievedRecord.TargetRange)
+		t.Errorf("expected TargetRange '127.0.0.1', got %q", retrievedRecord.TargetRange)
 	}
-
 	if len(retrievedServers) != 1 {
-		t.Fatalf("expected 1 server, got %d", len(retrievedServers))
+		t.Fatalf("expected 1 retrieved server, got %d", len(retrievedServers))
 	}
 	if retrievedServers[0].Transport != types.TransportHTTP {
-		t.Errorf("REGRESSION: retrieved server transport is not 'http': %q", retrievedServers[0].Transport)
+		t.Errorf("expected Transport 'http', got %q", retrievedServers[0].Transport)
+	}
+	if retrievedServers[0].TransportSecurity != types.TransportSecurityPlaintext {
+		t.Errorf("expected TransportSecurity 'plaintext HTTP', got %q", retrievedServers[0].TransportSecurity)
 	}
 	if retrievedServers[0].DetectedAt.IsZero() || retrievedServers[0].DetectedAt.Year() == 1 {
 		t.Errorf("REGRESSION: retrieved server DetectedAt is zero-value: %v", retrievedServers[0].DetectedAt)

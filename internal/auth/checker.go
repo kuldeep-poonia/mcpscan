@@ -4,6 +4,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +37,9 @@ func NewChecker(timeout time.Duration) *Checker {
 				ResponseHeaderTimeout: timeout,
 				IdleConnTimeout:       timeout,
 				DisableKeepAlives:     true,
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
 			},
 		},
 	}
@@ -63,7 +67,11 @@ func (c *Checker) CheckAuth(ctx context.Context, server types.DiscoveredServer) 
 		return server, nil
 	}
 
-	url := fmt.Sprintf("http://%s:%d/", server.IP, server.Port)
+	scheme := "http"
+	if server.TransportSecurity == types.TransportSecurityHTTPS {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s:%d/", scheme, server.IP, server.Port)
 
 	// Single probe payload: low-privilege informational request (`tools/list`)
 	probeReq := map[string]interface{}{

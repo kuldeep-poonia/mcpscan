@@ -67,6 +67,8 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 		scan_id INTEGER NOT NULL,
 		ip TEXT NOT NULL,
 		port INTEGER NOT NULL,
+		transport TEXT NOT NULL DEFAULT 'http',
+		transport_security TEXT NOT NULL DEFAULT 'not evaluated',
 		mcp_confidence TEXT NOT NULL,
 		protocol_version TEXT NOT NULL,
 		auth_status TEXT NOT NULL,
@@ -96,6 +98,10 @@ func (s *Storage) InitSchema(ctx context.Context) error {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initializing schema: %w", err)
 	}
+
+	// Gracefully apply column additions for pre-existing databases
+	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN transport TEXT NOT NULL DEFAULT 'http';")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE discovered_servers ADD COLUMN transport_security TEXT NOT NULL DEFAULT 'not evaluated';")
 
 	// Apply file permission hardening
 	s.restrictFilePermissions()
@@ -141,8 +147,8 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 
 	// 2. Insert discovered servers
 	serverQuery := `
-	INSERT INTO discovered_servers (scan_id, ip, port, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+	INSERT INTO discovered_servers (scan_id, ip, port, transport, transport_security, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	stmt, err := tx.PrepareContext(ctx, serverQuery)
 	if err != nil {
@@ -152,10 +158,18 @@ func (s *Storage) SaveScan(ctx context.Context, record *types.ScanRecord, server
 
 	for i := range servers {
 		servers[i].ScanID = scanID
+		if servers[i].Transport == "" {
+			servers[i].Transport = types.TransportHTTP
+		}
+		if servers[i].TransportSecurity == "" {
+			servers[i].TransportSecurity = types.TransportSecurityNotEvaluated
+		}
 		_, err := stmt.ExecContext(ctx,
 			scanID,
 			servers[i].IP,
 			servers[i].Port,
+			string(servers[i].Transport),
+			string(servers[i].TransportSecurity),
 			string(servers[i].MCPConfidence),
 			servers[i].ProtocolVersion,
 			string(servers[i].AuthStatus),
@@ -353,7 +367,7 @@ func (s *Storage) GetLastScan(ctx context.Context) (*types.ScanRecord, []types.D
 // getServersForScan queries discovered servers associated with a specific scan ID.
 func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *types.ScanRecord) (*types.ScanRecord, []types.DiscoveredServer, error) {
 	rows, err := db.QueryContext(ctx, `
-	SELECT id, scan_id, ip, port, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at
+	SELECT id, scan_id, ip, port, transport, transport_security, mcp_confidence, protocol_version, auth_status, auth_confidence, risk_level, detected_at
 	FROM discovered_servers
 	WHERE scan_id = ?
 	ORDER BY id ASC;
@@ -366,13 +380,20 @@ func (s *Storage) getServersForScan(ctx context.Context, db *sql.DB, record *typ
 	var servers []types.DiscoveredServer
 	for rows.Next() {
 		var srv types.DiscoveredServer
-		var mcpConf, authStat, authConf, riskLvl, detTimeStr string
+		var transportStr, transSecStr, mcpConf, authStat, authConf, riskLvl, detTimeStr string
 
-		if err := rows.Scan(&srv.ID, &srv.ScanID, &srv.IP, &srv.Port, &mcpConf, &srv.ProtocolVersion, &authStat, &authConf, &riskLvl, &detTimeStr); err != nil {
+		if err := rows.Scan(&srv.ID, &srv.ScanID, &srv.IP, &srv.Port, &transportStr, &transSecStr, &mcpConf, &srv.ProtocolVersion, &authStat, &authConf, &riskLvl, &detTimeStr); err != nil {
 			return nil, nil, fmt.Errorf("scanning server row: %w", err)
 		}
 
-		srv.Transport = types.TransportHTTP
+		srv.Transport = types.TransportType(transportStr)
+		if srv.Transport == "" {
+			srv.Transport = types.TransportHTTP
+		}
+		srv.TransportSecurity = types.TransportSecurity(transSecStr)
+		if srv.TransportSecurity == "" {
+			srv.TransportSecurity = types.TransportSecurityNotEvaluated
+		}
 		srv.MCPConfidence = types.MCPConfidence(mcpConf)
 		srv.AuthStatus = types.AuthStatus(authStat)
 		srv.AuthConfidence = types.AuthConfidence(authConf)

@@ -330,6 +330,41 @@ func TestCheckAuth_UnverifiableProtected(t *testing.T) {
 	t.Logf("UnverifiableProtected Auth Audit: PASS (Status=%v, Confidence=%v, Risk=%v)", res.AuthStatus, res.AuthConfidence, res.RiskLevel)
 }
 
+// TestCheckAuth_HTTPSServerExactOneRequest asserts that CheckAuth handles TLS/HTTPS servers and issues exactly 1 request.
+func TestCheckAuth_HTTPSServerExactOneRequest(t *testing.T) {
+	var reqCount int32
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&reqCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":99,"result":{"tools":[]}}`))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	target := types.DiscoveredServer{
+		IP:                host,
+		Port:              port,
+		Transport:         types.TransportHTTP,
+		TransportSecurity: types.TransportSecurityHTTPS,
+		MCPConfidence:     types.ConfidenceConfirmed,
+	}
+
+	c := NewChecker(1 * time.Second)
+	res, err := c.CheckAuth(context.Background(), target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	count := atomic.LoadInt32(&reqCount)
+	if count != 1 {
+		t.Errorf("expected exactly 1 request to HTTPS server, got %d", count)
+	}
+	if res.AuthStatus != types.AuthUnprotected {
+		t.Errorf("expected AuthUnprotected for open HTTPS server, got %v", res.AuthStatus)
+	}
+}
 
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")

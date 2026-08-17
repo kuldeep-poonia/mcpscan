@@ -320,6 +320,67 @@ func TestDetector_AuthNonMCPTrap_HTMLLoginPage(t *testing.T) {
 }
 
 
+// TestDetector_HTTPSServerDetection asserts that TLS/HTTPS MCP servers with self-signed certs are detected as HTTPS.
+func TestDetector_HTTPSServerDetection(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		buf := make([]byte, 1024)
+		n, _ := r.Body.Read(buf)
+		bodyStr := string(buf[:n])
+		if strings.Contains(bodyStr, "tools/list") {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"tls_tool"}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"tls-mcp","version":"1.0.0"}}}`))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	d := NewDetector(1 * time.Second)
+	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if srv.MCPConfidence != types.ConfidenceConfirmed {
+		t.Errorf("expected ConfidenceConfirmed for TLS MCP server, got %v", srv.MCPConfidence)
+	}
+	if srv.TransportSecurity != types.TransportSecurityHTTPS {
+		t.Errorf("expected TransportSecurityHTTPS for TLS MCP server, got %q", srv.TransportSecurity)
+	}
+}
+
+// TestDetector_TransportSecurityPlaintext asserts that standard HTTP MCP servers are detected as plaintext HTTP.
+func TestDetector_TransportSecurityPlaintext(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		buf := make([]byte, 1024)
+		n, _ := r.Body.Read(buf)
+		bodyStr := string(buf[:n])
+		if strings.Contains(bodyStr, "tools/list") {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}`))
+	}))
+	defer ts.Close()
+
+	host, portStr, _ := netSplitHostPort(ts.URL)
+	port, _ := strconv.Atoi(portStr)
+
+	d := NewDetector(1 * time.Second)
+	srv, err := d.DetectPort(context.Background(), types.OpenPort{IP: host, Port: port})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if srv.TransportSecurity != types.TransportSecurityPlaintext {
+		t.Errorf("expected TransportSecurityPlaintext for HTTP MCP server, got %q", srv.TransportSecurity)
+	}
+}
+
 func netSplitHostPort(rawURL string) (string, string, error) {
 	trimmed := strings.TrimPrefix(rawURL, "http://")
 	trimmed = strings.TrimPrefix(trimmed, "https://")

@@ -48,6 +48,15 @@ const (
 	TransportStdio TransportType = "stdio"
 )
 
+// TransportSecurity represents the wire encryption status of a network MCP server.
+type TransportSecurity string
+
+const (
+	TransportSecurityPlaintext     TransportSecurity = "plaintext HTTP"
+	TransportSecurityHTTPS         TransportSecurity = "HTTPS"
+	TransportSecurityNotEvaluated TransportSecurity = "not evaluated"
+)
+
 // ScanConfig holds runtime scan parameters configured via CLI flags.
 type ScanConfig struct {
 	Target       string        `json:"target"`
@@ -74,17 +83,18 @@ type ScanRecord struct {
 
 // DiscoveredServer represents an identified HTTP service on an IP and port.
 type DiscoveredServer struct {
-	ID              int64          `json:"id"`
-	ScanID          int64          `json:"scan_id"`
-	IP              string         `json:"ip"`
-	Port            int            `json:"port"`
-	Transport       TransportType  `json:"transport"`
-	MCPConfidence   MCPConfidence  `json:"mcp_confidence"`
-	ProtocolVersion string         `json:"protocol_version"`
-	AuthStatus      AuthStatus     `json:"auth_status"`
-	AuthConfidence  AuthConfidence `json:"auth_confidence"`
-	RiskLevel       RiskLevel      `json:"risk_level"`
-	DetectedAt      time.Time      `json:"detected_at"`
+	ID                int64             `json:"id"`
+	ScanID            int64             `json:"scan_id"`
+	IP                string            `json:"ip"`
+	Port              int               `json:"port"`
+	Transport         TransportType     `json:"transport"`
+	TransportSecurity TransportSecurity `json:"transport_security"`
+	MCPConfidence     MCPConfidence     `json:"mcp_confidence"`
+	ProtocolVersion   string            `json:"protocol_version"`
+	AuthStatus        AuthStatus        `json:"auth_status"`
+	AuthConfidence    AuthConfidence    `json:"auth_confidence"`
+	RiskLevel         RiskLevel         `json:"risk_level"`
+	DetectedAt        time.Time         `json:"detected_at"`
 }
 
 // StdioDiscoveredServer represents an MCP server configured over stdio transport in a local AI tool config file.
