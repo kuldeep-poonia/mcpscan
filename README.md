@@ -148,6 +148,7 @@ mcpscan report --db audit.db --format json
 
 - **Transport Scope:** Stdio detection checks 4 known AI tools (Claude Desktop, Cursor, Antigravity, VS Code); it does not perform blind filesystem-wide searches.
 - **Transport Security:** HTTPS detection verifies the presence of TLS wire encryption only; it does not validate certificate authority chains or trust status (allowing audit of internal/self-signed private services). Plaintext exposure on loopback (`127.0.0.1`) represents a lower exposure profile than plaintext on routable subnets.
+- **Detection Latency:** For an individual unresponsive server (hanging without dropping the connection), worst-case detection time can take up to 2x the configured `--timeout` due to sequential HTTP-then-HTTPS probing.
 - **Path Verification:** Some platform configuration paths (Cursor across OSs, and macOS/Linux variants) are inferred from convention and pending community verification. *If a config path differs for your environment, please open a GitHub issue with your tool and OS path details.*
 - **Process Matching:** Process cross-referencing uses non-elevated OS inspection and is best-effort/heuristic.
 - **Zero Credential Exposure:** Secret keys in CLI arguments are masked, and environment variables are never stored or logged.
