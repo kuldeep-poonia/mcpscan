@@ -9,6 +9,8 @@
 
 MCPScan is a single-binary, offline, zero-telemetry CLI tool designed to discover and audit Model Context Protocol (MCP) servers across your private network (HTTP transports) and local AI developer tools (Stdio transports).
 
+![MCPScan Live Demo](mcpscan_demo.gif)
+
 > [!IMPORTANT]
 > **Privacy Guarantee:** MCPScan makes zero outbound telemetry calls. For local stdio configs, environment variable contents (`env` blocks) are **never stored or displayed** (only their presence is noted), and all inline credentials in CLI arguments are masked before persistence.
 
